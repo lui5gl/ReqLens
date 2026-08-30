@@ -14,19 +14,61 @@ use super::views::render_ui;
 use crate::config::cli::AppConfig;
 use crate::error::Result;
 
+#[cfg(unix)]
+struct RawModeGuard {
+    orig: libc::termios,
+    fd: libc::c_int,
+}
+
+#[cfg(unix)]
+impl RawModeGuard {
+    fn new() -> std::io::Result<Self> {
+        unsafe {
+            let mut orig = std::mem::zeroed();
+            let fd = libc::STDIN_FILENO;
+            if libc::tcgetattr(fd, &mut orig) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut raw = orig;
+            libc::cfmakeraw(&mut raw);
+            if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self { orig, fd })
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = libc::tcsetattr(self.fd, libc::TCSANOW, &self.orig);
+        }
+    }
+}
+
 pub fn run_tui_app(config: &AppConfig) -> Result<()> {
-    enable_raw_mode()?;
+    #[cfg(unix)]
+    let _fallback_guard = match enable_raw_mode() {
+        Ok(_) => None,
+        Err(_) => RawModeGuard::new().ok(),
+    };
+
+    #[cfg(not(unix))]
+    let _ = enable_raw_mode();
+
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    let _ = execute!(stdout, EnterAlternateScreen);
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let mut state = TuiState::new(config.db_path.clone());
     let res = run_loop(&mut terminal, &mut state, config);
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
 
     res
 }
@@ -41,8 +83,8 @@ fn run_loop(
     while !state.should_quit {
         terminal.draw(|frame| render_ui(frame, state, config))?;
 
-        if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()?
+        if event::poll(tick_rate).unwrap_or(false) {
+            if let Ok(Event::Key(key)) = event::read()
                 && key.kind == KeyEventKind::Press
             {
                 handle_key_event(state, key.code);

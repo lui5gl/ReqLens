@@ -5,8 +5,9 @@
 
 | Propiedad | Especificación |
 | :--- | :--- |
-| **Versión de Arquitectura** | 0.1.3 (Universal POSIX / Multi-Init) |
+| **Versión de Arquitectura** | 0.1.4 (Universal POSIX / Multi-Init) |
 | **Lenguaje y Runtime** | Rust 2024 edition / Native POSIX Threadpool |
+
 
 
 
