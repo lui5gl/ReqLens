@@ -1,3 +1,123 @@
-fn main() {
-    println!("Hello, world!");
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tracing::{info, warn};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+use reqlens::config::cli::Commands;
+use reqlens::config::{self, parse_cli};
+use reqlens::ingest;
+use reqlens::ops;
+use reqlens::proxy;
+use reqlens::tui;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_cli();
+
+    match args.command {
+        Some(Commands::Status { db_path }) => {
+            ops::print_status(&db_path)?;
+            return Ok(());
+        }
+        Some(Commands::Restart) => {
+            ops::restart_service()?;
+            return Ok(());
+        }
+        Some(Commands::Disable) => {
+            ops::disable_service()?;
+            return Ok(());
+        }
+        Some(Commands::Uninstall { purge }) => {
+            ops::uninstall_service(purge)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let config = config::load_config()?;
+
+    if !config.tui_enabled {
+        tracing_subscriber::registry()
+            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+
+    if !config.redact_enabled {
+        warn!(
+            "⚠️ SECRETS REDACTION IS DISABLED (--no-redact). Sensitive data will be written to disk!"
+        );
+    }
+
+    let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(config.db_path.clone());
+    let config = Arc::new(config);
+
+    if config.tui_enabled {
+        let (proxy_shutdown_tx, proxy_shutdown_rx) = oneshot::channel();
+        let proxy_cfg = Arc::clone(&config);
+        let proxy_ingest = ingest_sender.clone();
+
+        let proxy_handle = tokio::spawn(async move {
+            let _ = proxy::run_server(proxy_cfg, proxy_ingest, async move {
+                let _ = proxy_shutdown_rx.await;
+            })
+            .await;
+        });
+
+        let tui_cfg = (*config).clone();
+        let tui_handle = tokio::task::spawn_blocking(move || tui::run_tui_app(&tui_cfg));
+
+        let _ = tui_handle.await?;
+        let _ = proxy_shutdown_tx.send(());
+        let _ = proxy_handle.await;
+    } else {
+        proxy::run_server(
+            Arc::clone(&config),
+            ingest_sender.clone(),
+            shutdown_signal(),
+        )
+        .await?;
+    }
+
+    info!("Proxy listener stopped. Flushing remaining telemetry to SQLite...");
+    drop(ingest_sender);
+
+    match tokio::time::timeout(Duration::from_secs(5), ingest_handle).await {
+        Ok(res) => {
+            if let Err(e) = res {
+                eprintln!("Ingest task terminated with error: {:?}", e);
+            }
+        }
+        Err(_) => {
+            eprintln!("Timeout waiting for database writer to flush.");
+        }
+    }
+
+    info!("ReqLens shutdown completed cleanly.");
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

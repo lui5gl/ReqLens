@@ -45,10 +45,15 @@ ReqLens actúa como un **proxy reverso transparente** interpuesto entre los clie
 
 ## 📊 Capacidades y Casos de Uso
 
+- **Dashboard Interactivo Integrado (TUI):** Visualiza peticiones en tiempo real, filtra errores (≥400), detecta peticiones lentas (≥500ms) e inspecciona headers y cuerpos completos sin abrir `sqlite3` (activable mediante `--tui`).
+- **Modo Servidor Headless (Producción):** Ejecución sin UI, ideal para demonios de `systemd`, contenedores y entornos desatendidos.
 - **Diagnóstico y Debugging Forense:** Inspecciona el payload exacto de peticiones que generaron excepciones en backend.
 - **Auditoría de Endpoints Críticos:** Registra la actividad y modificaciones en APIs sensibles con trazabilidad de IP real del cliente (`X-Forwarded-For`).
 - **Análisis de Rendimiento:** Mide latencias punto a punto (`duration_ms`) y detecta cuellos de botella por endpoint.
 - **Consultas Analíticas Inmediatas:** Utiliza SQL estándar sobre SQLite para filtrar, agrupar y diagnosticar sin necesidad de montar clústeres externos de telemetría (Elasticsearch, OpenTelemetry, etc.).
+- **Gestión Nativa de Ciclo de Vida:** Comandos directos integrados en la CLI (`reqlens status`, `reqlens restart`, `reqlens disable`, `reqlens uninstall`).
+
+
 
 ---
 

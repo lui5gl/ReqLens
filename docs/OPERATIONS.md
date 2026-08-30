@@ -29,8 +29,24 @@ cargo install --path . --locked --root /usr/local
 | `--db-path` | `REQLENS_DB_PATH` | `./data/reqlens.db` | Ruta absoluta o relativa al archivo SQLite |
 | `--max-body` | `REQLENS_MAX_BODY` | `65536` (64 KB) | Límite máximo en bytes de captura por payload |
 | `--no-redact` | `REQLENS_NO_REDACT` | `false` | Desactiva redacción automática (**no recomendado**) |
+| `--tui` | `REQLENS_TUI` | `false` | Activa la interfaz de terminal interactiva (TUI) |
 
 > 💡 **Principio Fail-Fast:** Precedencia: `CLI flags > Variables de Entorno > Defaults`. Cualquier error de parseo o puerto ocupado aborta inmediatamente el proceso con código de salida $\ne 0$ y traza en `stderr`.
+
+### Modos de Ejecución
+
+1. **Modo Headless (Por Defecto - Servidor / Daemon):**
+   ```bash
+   reqlens --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
+   ```
+   Ideal para entornos desatendidos, servicios systemd o contenedores. Las trazas de observabilidad se emiten en formato estructurado `tracing`.
+
+2. **Modo Dashboard Interactivo (TUI):**
+   ```bash
+   reqlens --tui --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
+   ```
+   Lanza el proxy en background y una interfaz visual completa en el terminal con actualización automática, filtros por pestañas (`Todos`, `Errores`, `Lentos`), navegación por filas e inspección modal de cabeceras y payloads.
+
 
 ---
 
@@ -89,7 +105,49 @@ sudo systemctl enable --now reqlens
 
 ---
 
-## 3. Administración y Mantenimiento de SQLite (WAL)
+## 3. Comandos CLI de Ciclo de Vida (Gestión Nativa)
+
+ReqLens incluye subcomandos nativos en la CLI para consultar estado, reiniciar, deshabilitar y desinstalar sin memorizar comandos complejos de bajo nivel:
+
+### A. Consultar la Versión
+```bash
+reqlens --version
+# o de forma abreviada:
+reqlens -V
+```
+
+### B. Consultar el Estado del Sistema y Base de Datos
+```bash
+reqlens status
+# con ruta personalizada de DB:
+reqlens status --db-path /var/lib/reqlens/reqlens.db
+```
+Muestra el estado del servicio systemd (Activo, Inactivo, Fallido), ubicación física del archivo SQLite, tamaño en disco, volumen de peticiones capturadas, conteo de errores y latencia media.
+
+### C. Reiniciar el Servicio
+```bash
+sudo reqlens restart
+```
+Ejecuta el reinicio seguro asegurando que el proceso anterior realice el drenado (*graceful drain*) de la cola MPSC a SQLite antes de levantarse nuevamente.
+
+### D. Deshabilitar y Detener el Servicio (Bypass)
+```bash
+sudo reqlens disable
+```
+Detiene el servicio en ejecución y lo deshabilita para que no inicie automáticamente con el sistema. Si se reconfigura el puerto, Apache atenderá el tráfico directo sin intervención de ReqLens.
+
+### E. Desinstalación Completa del Sistema
+```bash
+# Desinstalación estándar (conservando base de datos histórica):
+sudo reqlens uninstall
+
+# Desinstalación y purga completa (elimina unidad systemd, usuario y base de datos):
+sudo reqlens uninstall --purge
+```
+
+---
+
+## 4. Administración y Mantenimiento de SQLite (WAL)
 
 ReqLens opera SQLite en modo **Write-Ahead Logging (WAL)**. En producción, el directorio de datos contendrá tres archivos: `reqlens.db`, `reqlens.db-wal` y `reqlens.db-shm`.
 
@@ -127,7 +185,7 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 
 ---
 
-## 4. Matriz de Resolución de Problemas (Troubleshooting)
+## 5. Matriz de Resolución de Problemas (Troubleshooting)
 
 | Síntoma Observado | Causa Raíz Probable | Solución Operativa |
 | :--- | :--- | :--- |
@@ -140,7 +198,7 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 
 ---
 
-## 5. Observabilidad del Propio Proceso
+## 6. Observabilidad del Propio Proceso
 
 - **Trazas Estructuradas (`tracing`):** Cada conexión entrante genera un `request_id` único correlacionado. Los errores de serialización o conexión al upstream se registran con contexto sin exponer datos sensibles.
 - **Endpoints de Diagnóstico (Roadmap):**

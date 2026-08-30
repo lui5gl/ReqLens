@@ -159,6 +159,7 @@ src/
 ├── proxy/           # Motor de red HTTP (Hyper), gestión de upstream y conexión TCP
 ├── capture/         # Normalización de eventos, allowlist de headers y redacción de secretos
 ├── ingest/          # Schema SQLite, canal MPSC y persistencia por lotes transaccionales
+├── tui/             # Interfaz de terminal interactiva (Ratatui / Crossterm) y vistas
 └── error.rs         # Catálogo de errores tipados de dominio (thiserror)
 ```
 
@@ -166,7 +167,9 @@ src/
 - `proxy` únicamente depende de `capture` para generar los snapshots.
 - `capture` produce eventos agnósticos que envía a `ingest`.
 - `ingest` desconoce por completo la existencia de HTTP, sockets o `hyper`.
+- `tui` consume datos de forma reactiva y de solo lectura de SQLite sin interferir en el camino de red.
 - Los errores son tipados y nunca se silencian en ninguna capa.
+
 
 ---
 
