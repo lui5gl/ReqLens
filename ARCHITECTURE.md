@@ -5,8 +5,9 @@
 
 | Propiedad | Especificación |
 | :--- | :--- |
-| **Versión de Arquitectura** | 0.1.0 (MVP) |
+| **Versión de Arquitectura** | 0.1.1 (MVP) |
 | **Lenguaje y Runtime** | Rust 2024 edition / Tokio async runtime |
+
 | **Capa de Red** | Hyper (HTTP/1.1 Client & Server) |
 | **Persistencia** | SQLite 3 (WAL mode) via pool monohilo dedicado |
 | **Audiencia** | Arquitectos de Software, Desarrolladores Core y Contribuidores |

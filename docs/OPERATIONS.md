@@ -27,10 +27,11 @@ El pipeline de GitHub Actions genera automáticamente binarios precompilados en 
 ### Instalación Rápida desde Release Precompilado
 ```bash
 # Descargar el binario estático universal (musl)
-TAG="v0.1.0"
-curl -sSL "https://github.com/tu-org/reqlens/releases/download/${TAG}/reqlens-${TAG}-x86_64-unknown-linux-musl.tar.gz" | sudo tar -xz -C /usr/local/bin --strip-components=1 reqlens-${TAG}-x86_64-unknown-linux-musl/reqlens
+TAG="v0.1.1"
+curl -sSL "https://github.com/lui5gl/ReqLens/releases/download/${TAG}/reqlens-${TAG}-x86_64-unknown-linux-musl.tar.gz" | sudo tar -xz -C /usr/local/bin --strip-components=1 reqlens-${TAG}-x86_64-unknown-linux-musl/reqlens
 sudo chmod +x /usr/local/bin/reqlens
 ```
+
 
 ### Compilación Local desde Código Fuente
 ```bash

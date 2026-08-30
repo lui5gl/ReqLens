@@ -3,13 +3,14 @@ name: CI (Integration & Tests)
 on:
   push:
     branches:
-      - '**'
+      - main
   pull_request:
     branches:
       - main
 
 permissions:
   contents: read
+
 
 jobs:
   lint-and-format:
