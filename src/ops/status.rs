@@ -16,25 +16,35 @@ pub fn print_status(db_path: &Path) -> Result<()> {
 }
 
 fn check_systemd_status() {
-    let output = Command::new("systemctl")
+    if let Ok(out) = Command::new("systemctl")
         .args(["is-active", "reqlens"])
-        .output();
-
-    match output {
-        Ok(out) => {
-            let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let color_status = match status.as_str() {
-                "active" => "🟢 Activo (Running)",
-                "inactive" => "⚪ Inactivo (Stopped)",
-                "failed" => "🔴 Fallido (Failed)",
-                _ => "⚪ Desconocido / No instalado",
-            };
-            println!("• Servicio Systemd: {}", color_status);
-        }
-        Err(_) => {
-            println!("• Servicio Systemd: No disponible (entorno sin systemd)");
-        }
+        .output()
+    {
+        let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let color_status = match status.as_str() {
+            "active" => "🟢 Activo (Running - systemd)",
+            "inactive" => "⚪ Inactivo (Stopped)",
+            "failed" => "🔴 Fallido (Failed)",
+            _ => "⚪ Desconocido / No instalado",
+        };
+        println!("• Servicio:         {}", color_status);
+        return;
     }
+
+    if Path::new("/etc/init.d/reqlens").exists() {
+        let is_running = Command::new("service")
+            .args(["reqlens", "status"])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("ejecución"));
+        if is_running {
+            println!("• Servicio:         🟢 Activo (Running - SysV init /etc/init.d/reqlens)");
+        } else {
+            println!("• Servicio:         ⚪ Inactivo (SysV init /etc/init.d/reqlens)");
+        }
+        return;
+    }
+
+    println!("• Servicio:         ⚪ No instalado como servicio");
 }
 
 fn inspect_database(db_path: &Path) -> Result<()> {

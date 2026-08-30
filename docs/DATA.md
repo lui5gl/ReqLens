@@ -5,8 +5,9 @@
 
 | Propiedad | Especificación |
 | :--- | :--- |
-| **Versión de Modelo** | 0.1.2 |
+| **Versión de Modelo** | 0.1.3 |
 | **Motor de Base de Datos** | SQLite 3 embebido |
+
 
 
 | **Modo de Transacción / Diario** | WAL (*Write-Ahead Logging*) |

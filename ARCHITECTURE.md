@@ -5,8 +5,9 @@
 
 | Propiedad | Especificación |
 | :--- | :--- |
-| **Versión de Arquitectura** | 0.1.2 (Universal POSIX / Multi-Kernel) |
+| **Versión de Arquitectura** | 0.1.3 (Universal POSIX / Multi-Init) |
 | **Lenguaje y Runtime** | Rust 2024 edition / Native POSIX Threadpool |
+
 
 
 | **Capa de Red** | Hyper (HTTP/1.1 Client & Server) |
