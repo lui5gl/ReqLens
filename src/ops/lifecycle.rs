@@ -3,6 +3,93 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+pub fn install_service(
+    listen: &str,
+    upstream: &str,
+    db_path: &Path,
+    max_body: usize,
+    no_redact: bool,
+) -> Result<()> {
+    println!("📦 Instalando ReqLens en el sistema...");
+
+    let current_exe = std::env::current_exe()?;
+    let target_bin = Path::new("/usr/local/bin/reqlens");
+
+    if current_exe != target_bin {
+        fs::copy(&current_exe, target_bin)?;
+        println!("✅ Binario copiado a /usr/local/bin/reqlens");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(target_bin)?.permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(target_bin, perms);
+    }
+
+    if let Some(parent) = db_path.parent()
+        && !parent.exists()
+    {
+        let _ = fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(parent)?.permissions();
+            perms.set_mode(0o700);
+            let _ = fs::set_permissions(parent, perms);
+        }
+    }
+
+    let _ = Command::new("useradd")
+        .args(["-r", "-s", "/usr/sbin/nologin", "reqlens"])
+        .status();
+
+    let redact_flag = if no_redact { " --no-redact" } else { "" };
+    let service_content = format!(
+        r#"[Unit]
+Description=ReqLens — HTTP Observability Reverse Proxy
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/reqlens --listen {} --upstream {} --db-path {}{} --max-body {}
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+"#,
+        listen,
+        upstream,
+        db_path.display(),
+        redact_flag,
+        max_body
+    );
+
+    let service_path = Path::new("/etc/systemd/system/reqlens.service");
+    let has_systemd = Path::new("/run/systemd/system").exists()
+        || Command::new("systemctl").arg("--version").output().is_ok();
+
+    if has_systemd && fs::write(service_path, service_content).is_ok() {
+        let _ = Command::new("systemctl").arg("daemon-reload").status();
+        let _ = Command::new("systemctl")
+            .args(["enable", "--now", "reqlens"])
+            .status();
+        println!("✅ Servicio systemd registrado e iniciado automáticamente.");
+    } else {
+        println!("ℹ️  Binario instalado globalmente en /usr/local/bin/reqlens.");
+    }
+
+    println!(
+        "\n🎉 Instalación completada. Ahora puedes ejecutar 'reqlens' o 'reqlens tui' desde cualquier directorio.\n"
+    );
+    Ok(())
+}
+
 pub fn restart_service() -> Result<()> {
     println!("🔄 Reiniciando servicio ReqLens...");
     let status = Command::new("systemctl")
@@ -30,9 +117,7 @@ pub fn disable_service() -> Result<()> {
 
     match status {
         Ok(s) if s.success() => {
-            println!(
-                "✅ Servicio reqlens deshabilitado. Apache recibirá tráfico directo si se reconfiguró el puerto."
-            );
+            println!("✅ Servicio reqlens deshabilitado.");
         }
         _ => {
             println!(
@@ -54,7 +139,10 @@ pub fn uninstall_service(purge: bool) -> Result<()> {
     let _ = Command::new("systemctl").arg("daemon-reload").status();
     let _ = Command::new("systemctl").arg("reset-failed").status();
 
-    println!("✅ Unidad systemd removida.");
+    let _ = fs::remove_file("/usr/local/bin/reqlens");
+    let _ = fs::remove_file("/usr/bin/reqlens");
+
+    println!("✅ Unidad systemd y binario removidos de /usr/local/bin/reqlens.");
 
     if purge {
         let db_dir = Path::new("/var/lib/reqlens");
@@ -68,8 +156,6 @@ pub fn uninstall_service(purge: bool) -> Result<()> {
         println!("ℹ️  Base de datos conservada en /var/lib/reqlens (usa --purge para eliminarla).");
     }
 
-    println!(
-        "\n✨ Desinstalación concluida. Para remover el binario: sudo rm -f /usr/local/bin/reqlens\n"
-    );
+    println!("\n✨ Desinstalación concluida limpiamente.\n");
     Ok(())
 }

@@ -78,6 +78,27 @@ pub enum Commands {
     Restart,
     /// Detiene y deshabilita el servicio de ReqLens
     Disable,
+    /// Instala el binario en /usr/local/bin y opcionalmente configura el servicio systemd
+    Install {
+        #[arg(long, env = "REQLENS_LISTEN", default_value = DEFAULT_LISTEN)]
+        listen: String,
+
+        #[arg(long, env = "REQLENS_UPSTREAM", default_value = DEFAULT_UPSTREAM)]
+        upstream: String,
+
+        #[arg(
+            long,
+            env = "REQLENS_DB_PATH",
+            default_value = "/var/lib/reqlens/reqlens.db"
+        )]
+        db_path: PathBuf,
+
+        #[arg(long, env = "REQLENS_MAX_BODY", default_value_t = DEFAULT_MAX_BODY)]
+        max_body: usize,
+
+        #[arg(long, env = "REQLENS_NO_REDACT", default_value_t = false)]
+        no_redact: bool,
+    },
     /// Desinstala el servicio y binario de ReqLens del sistema
     Uninstall {
         /// Elimina también la base de datos histórica y el usuario del sistema

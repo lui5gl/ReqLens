@@ -28,8 +28,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ops::disable_service()?;
             return Ok(());
         }
+        Some(Commands::Install {
+            listen,
+            upstream,
+            db_path,
+            max_body,
+            no_redact,
+        }) => {
+            ops::install_service(&listen, &upstream, &db_path, max_body, no_redact)?;
+            return Ok(());
+        }
         Some(Commands::Uninstall { purge }) => {
             ops::uninstall_service(purge)?;
+            return Ok(());
+        }
+        Some(Commands::Tui {
+            db_path,
+            listen,
+            upstream,
+        }) => {
+            let tui_cfg = reqlens::config::cli::AppConfig {
+                listen_addr: listen
+                    .parse()
+                    .unwrap_or_else(|_| "0.0.0.0:8080".parse().unwrap()),
+                upstream_uri: upstream
+                    .parse()
+                    .unwrap_or_else(|_| "http://127.0.0.1:80".parse().unwrap()),
+                db_path,
+                max_body: 65536,
+                redact_enabled: true,
+                tui_enabled: true,
+            };
+            tokio::task::spawn_blocking(move || tui::run_tui_app(&tui_cfg)).await??;
             return Ok(());
         }
         _ => {}
