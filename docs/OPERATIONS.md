@@ -14,11 +14,30 @@
 
 ## 1. Despliegue e Instalación
 
-### Compilación e Instalación del Binario
+### Opciones de Binarios y Arquitecturas (CI/CD Releases)
+
+El pipeline de GitHub Actions genera automáticamente binarios precompilados en cada release:
+
+| Target de Compilación | Tipo de Enlace | Compatibilidad de Sistema |
+| :--- | :--- | :--- |
+| **`x86_64-unknown-linux-musl`** | **100% Estático (Zero-Deps)** | **Universal / Máxima Compatibilidad:** Funciona en cualquier distribución Linux (antiguas como CentOS 6/7, Debian 8/9, RHEL o modernas como Alpine, Ubuntu, Fedora) sin importar la versión de `glibc`. |
+| **`x86_64-unknown-linux-gnu`** | Dinámico (`glibc`) | Distribuciones Linux modernas estándar de 64 bits. |
+| **`aarch64-unknown-linux-musl`** | **100% Estático (Zero-Deps)** | Servidores ARM64 (AWS Graviton, Raspberry Pi 4/5, servidores cloud ARM). |
+
+### Instalación Rápida desde Release Precompilado
+```bash
+# Descargar el binario estático universal (musl)
+TAG="v0.1.0"
+curl -sSL "https://github.com/tu-org/reqlens/releases/download/${TAG}/reqlens-${TAG}-x86_64-unknown-linux-musl.tar.gz" | sudo tar -xz -C /usr/local/bin --strip-components=1 reqlens-${TAG}-x86_64-unknown-linux-musl/reqlens
+sudo chmod +x /usr/local/bin/reqlens
+```
+
+### Compilación Local desde Código Fuente
 ```bash
 # Compilación optimizada para producción
 cargo install --path . --locked --root /usr/local
 ```
+
 
 ### Matriz de Parámetros de Configuración
 

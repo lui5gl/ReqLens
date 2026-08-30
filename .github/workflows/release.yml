@@ -1,0 +1,150 @@
+name: Release & Deployment
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux moderno estándar con glibc
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+
+          # Linux estático universal (MUSL) para cualquier distribución antigua o moderna (Alpine, CentOS, Debian, etc.)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: false
+
+          # Linux ARM64 estático (MUSL) para Raspberry Pi / AWS Graviton / Servidores ARM
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install native build dependencies (for MUSL / C bundling)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install Cross (for ARM cross-compilation)
+        if: matrix.use_cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Extract project version
+        id: get_version
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | awk -F '"' '{print $2}')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_ENV
+          else
+            echo "TAG_NAME=v${VERSION}" >> $GITHUB_ENV
+          fi
+
+      - name: Package release archive
+        run: |
+          ARCHIVE_NAME="reqlens-${{ env.TAG_NAME }}-${{ matrix.target }}"
+          STAGING_DIR="staging/${ARCHIVE_NAME}"
+          mkdir -p "${STAGING_DIR}"
+
+          cp "target/${{ matrix.target }}/release/reqlens" "${STAGING_DIR}/"
+          cp LICENSE "${STAGING_DIR}/"
+          cp README.md "${STAGING_DIR}/"
+
+          tar -czf "${ARCHIVE_NAME}.tar.gz" -C staging "${ARCHIVE_NAME}"
+          sha256sum "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+
+          echo "ASSET_ARCHIVE=${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          echo "ASSET_CHECKSUM=${ARCHIVE_NAME}.tar.gz.sha256" >> $GITHUB_ENV
+
+      - name: Upload artifact staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project version
+        id: release_info
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | head -1 | awk -F '"' '{print $2}')
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v${VERSION}"
+          fi
+          echo "TAG_NAME=${TAG}" >> $GITHUB_OUTPUT
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: Create unified checksum file
+        run: |
+          cd downloaded-artifacts
+          cat *.sha256 > SHA256SUMS.txt
+          ls -la
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.TAG_NAME }}
+          name: "ReqLens ${{ steps.release_info.outputs.TAG_NAME }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            downloaded-artifacts/*.tar.gz
+            downloaded-artifacts/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
