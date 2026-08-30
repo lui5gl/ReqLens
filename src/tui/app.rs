@@ -3,8 +3,9 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
+use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io::{self, Stdout};
 use std::time::Duration;
 
@@ -14,54 +15,33 @@ use super::views::render_ui;
 use crate::config::cli::AppConfig;
 use crate::error::Result;
 
-#[cfg(unix)]
-struct RawModeGuard {
-    orig: libc::termios,
-    fd: libc::c_int,
-}
-
-#[cfg(unix)]
-impl RawModeGuard {
-    fn new() -> std::io::Result<Self> {
-        unsafe {
-            let mut orig = std::mem::zeroed();
-            let fd = libc::STDIN_FILENO;
-            if libc::tcgetattr(fd, &mut orig) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let mut raw = orig;
-            libc::cfmakeraw(&mut raw);
-            if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(Self { orig, fd })
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = libc::tcsetattr(self.fd, libc::TCSANOW, &self.orig);
-        }
-    }
-}
+const DEFAULT_TERMINAL_COLUMNS: u16 = 80;
+const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
 pub fn run_tui_app(config: &AppConfig) -> Result<()> {
-    #[cfg(unix)]
-    let _fallback_guard = match enable_raw_mode() {
-        Ok(_) => None,
-        Err(_) => RawModeGuard::new().ok(),
-    };
-
-    #[cfg(not(unix))]
-    let _ = enable_raw_mode();
+    enable_raw_mode().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("ReqLens TUI requires an interactive terminal: {error}"),
+        )
+    })?;
 
     let mut stdout = io::stdout();
-    let _ = execute!(stdout, EnterAlternateScreen);
+    if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
+
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = create_terminal(backend);
+    let mut terminal = match terminal {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            let _ = disable_raw_mode();
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            return Err(error);
+        }
+    };
 
     let mut state = TuiState::new(config.db_path.clone());
     let res = run_loop(&mut terminal, &mut state, config);
@@ -71,6 +51,22 @@ pub fn run_tui_app(config: &AppConfig) -> Result<()> {
     let _ = terminal.show_cursor();
 
     res
+}
+
+fn create_terminal(backend: CrosstermBackend<Stdout>) -> Result<Terminal<CrosstermBackend<Stdout>>> {
+    match crossterm::terminal::size() {
+        Ok(_) => Ok(Terminal::new(backend)?),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            let fallback_area = Rect::new(0, 0, DEFAULT_TERMINAL_COLUMNS, DEFAULT_TERMINAL_ROWS);
+            Ok(Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Fixed(fallback_area),
+                },
+            )?)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn run_loop(
