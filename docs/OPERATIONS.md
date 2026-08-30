@@ -1,83 +1,150 @@
-# ReqLens — Operación
+# ReqLens — Manual de Operaciones y Producción (SRE)
 
-> Guía operativa: runbook, despliegue, troubleshooting y observabilidad del propio ReqLens.
-> Para el uso básico → [README.md](../README.md). Para el diseño → [ARCHITECTURE.md](../ARCHITECTURE.md).
+> Guía integral para operadores de sistemas y SRE: despliegue en Linux, administración de SQLite en modo WAL, rutinas de mantenimiento, observabilidad y resolución de incidencias.
+> Para la visión general del producto → [README.md](../README.md). Para el modelo de datos → [docs/DATA.md](DATA.md).
 
-|                          |                  |
-| ------------------------ | ---------------- |
-| **Versión**              | 0.1.0            |
-| **Última actualización** | 2026-08-14       |
-| **Audiencia**            | Operadores / SRE |
+| Propiedad | Especificación |
+| :--- | :--- |
+| **Sistema Operativo Objetivo** | Linux (Kernel $\ge$ 5.10 / systemd) |
+| **Permisos de Ejecución** | Usuario dedicado sin privilegios (`reqlens`), sin acceso root |
+| **Modo de Base de Datos** | SQLite 3 (WAL mode) en `/var/lib/reqlens` (permisos `0700`) |
+| **Audiencia** | Ingenieros de Sistemas, DevOps y SRE |
 
 ---
 
-## 1. Runbook operativo
+## 1. Despliegue e Instalación
 
+### Compilación e Instalación del Binario
 ```bash
-# Backup en caliente (seguro con WAL — nunca copies el .db a pelo sin incluir -wal/-shm)
-sqlite3 data/reqlens.db ".backup 'reqlens.backup.db'"
-
-# Verificación de integridad
-sqlite3 data/reqlens.db "PRAGMA integrity_check;"   # completo
-sqlite3 data/reqlens.db "PRAGMA quick_check;"        # rápido
+# Compilación optimizada para producción
+cargo install --path . --locked --root /usr/local
 ```
 
-- **Recuperación de corrupción:** restaurar backup; si no hay, `sqlite3 data/reqlens.db ".recover"` (≥ 3.29) extrae filas legibles a un archivo nuevo.
-- **WAL desmedido:** checkpoint automático por defecto (1000 páginas). Si `-wal` crece sin límite, sospechar una sesión `sqlite3` abierta sin commit. Forzar: `PRAGMA wal_checkpoint(TRUNCATE);`.
-- **Diagnóstico rápido:** métricas de drops/errores de ingest (`tracing`) + `SELECT COUNT(*)` por ventana temporal.
+### Matriz de Parámetros de Configuración
 
-## 2. Observabilidad del propio ReqLens
+| Parámetro CLI | Variable de Entorno | Valor por Defecto | Descripción Operativa |
+| :--- | :--- | :--- | :--- |
+| `--listen` | `REQLENS_LISTEN` | `0.0.0.0:8080` | Dirección IP y puerto TCP del listener del proxy |
+| `--upstream` | `REQLENS_UPSTREAM` | `http://127.0.0.1:80` | Dirección HTTP del servidor Apache destino |
+| `--db-path` | `REQLENS_DB_PATH` | `./data/reqlens.db` | Ruta absoluta o relativa al archivo SQLite |
+| `--max-body` | `REQLENS_MAX_BODY` | `65536` (64 KB) | Límite máximo en bytes de captura por payload |
+| `--no-redact` | `REQLENS_NO_REDACT` | `false` | Desactiva redacción automática (**no recomendado**) |
 
-- `tracing`: request-id por conexión; errores con contexto, nunca silenciados.
-- Métricas (roadmap cercano): requests totales, duración p50/p95, eventos persistidos, eventos descartados, errores de commit — expuestas en `/metrics` (red interna, sin auth).
-- Health: `/healthz` refleja el estado del writer (cola, última persistencia exitosa).
+> 💡 **Principio Fail-Fast:** Precedencia: `CLI flags > Variables de Entorno > Defaults`. Cualquier error de parseo o puerto ocupado aborta inmediatamente el proceso con código de salida $\ne 0$ y traza en `stderr`.
 
-## 3. Troubleshooting
+---
 
-| Síntoma                              | Causa probable                                     | Solución                                                      |
-| ------------------------------------ | -------------------------------------------------- | ------------------------------------------------------------- |
-| `Address already in use` al arrancar | Puerto del listener ocupado                        | Cambia `--listen` o libera el puerto                          |
-| `database is locked` al consultar    | Sesión `sqlite3` con transacción abierta           | Cierra la transacción; el writer no bloquea lecturas (WAL)    |
-| `-wal` crece sin límite              | Checkpoint no ejecutado                            | `PRAGMA wal_checkpoint(TRUNCATE);`                            |
-| No aparecen eventos                  | La persistencia es asíncrona (≤ 250 ms de retardo) | Reintenta; revisa los logs de `tracing` por errores de ingest |
-| Bodies como `[BINARY]`               | Content-Type no textual o encoding no soportado    | Esperado por diseño; no es un fallo                           |
+## 2. Configuración del Servicio Systemd (Hardened)
 
-## 4. Despliegue
-
-```bash
-cargo install --path . --locked
-```
-
-Servicio systemd de ejemplo (`/etc/systemd/system/reqlens.service`):
+Crea el archivo de servicio en `/etc/systemd/system/reqlens.service`:
 
 ```ini
 [Unit]
-Description=ReqLens — observabilidad de tráfico HTTP
-After=network.target
+Description=ReqLens — Reverse Proxy de Observabilidad HTTP
+Documentation=https://github.com/tu-org/reqlens
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
+Type=simple
 User=reqlens
 Group=reqlens
-ExecStart=/usr/local/bin/reqlens --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80 --db-path /var/lib/reqlens/reqlens.db
+ExecStart=/usr/local/bin/reqlens \
+    --listen 0.0.0.0:8080 \
+    --upstream http://127.0.0.1:80 \
+    --db-path /var/lib/reqlens/reqlens.db \
+    --max-body 65536
 Restart=on-failure
-RestartSec=5
+RestartSec=5s
+LimitNOFILE=65535
+
+# Sandbox y Aislamiento de Seguridad (Hardening)
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/reqlens
+ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/reqlens
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Notas:
+### Aprovisionamiento del Entorno y Arranque
+```bash
+# Crear usuario de sistema sin login
+sudo useradd -r -s /usr/sbin/nologin reqlens
 
-- Usuario dedicado `reqlens`, sin root. Crea `/var/lib/reqlens` con permisos `0700` del usuario.
-- Los clientes deben apuntar a ReqLens (DNS/LB/edge TLS); Apache permanece intacto en `:80`.
-- El reemplazo del binario no pierde datos: la DB vive en el directorio persistente.
+# Crear directorio de datos con permisos estrictos
+sudo mkdir -p /var/lib/reqlens
+sudo chown -R reqlens:reqlens /var/lib/reqlens
+sudo chmod 0700 /var/lib/reqlens
 
-## 5. Rendimiento esperado
+# Recargar systemd y arrancar el servicio
+sudo systemctl daemon-reload
+sudo systemctl enable --now reqlens
+```
 
-- Objetivo: ≥ 5 k req/s en hardware commodity (SSD/NVMe, WAL).
-- Latencia añadida al tráfico: mínima — la persistencia es asíncrona y no bloquea la respuesta.
-- Dimensionamiento y límites de backpressure: [ARCHITECTURE.md §9](../ARCHITECTURE.md#9-rendimiento-y-capacidad).
+---
+
+## 3. Administración y Mantenimiento de SQLite (WAL)
+
+ReqLens opera SQLite en modo **Write-Ahead Logging (WAL)**. En producción, el directorio de datos contendrá tres archivos: `reqlens.db`, `reqlens.db-wal` y `reqlens.db-shm`.
+
+### Respaldo en Caliente (Online Hot-Backup)
+> ⚠️ **NUNCA** utilices comandos como `cp` o `rsync` directamente sobre `reqlens.db` mientras el proxy esté en ejecución, ya que generará copias corruptas si hay escrituras activas en el archivo WAL.
+
+```bash
+# Generar respaldo consistente en caliente sin detener el tráfico
+sqlite3 /var/lib/reqlens/reqlens.db ".backup '/var/backups/reqlens_$(date +%Y%m%d_%H%M%S).db'"
+```
+
+### Comprobación de Integridad Periódica
+```bash
+# Verificación rápida (óptima para healthchecks y cronjobs frecuentes)
+sqlite3 /var/lib/reqlens/reqlens.db "PRAGMA quick_check;"
+
+# Verificación estructural exhaustiva
+sqlite3 /var/lib/reqlens/reqlens.db "PRAGMA integrity_check;"
+```
+
+### Control y Truncado del Archivo WAL
+Por defecto, SQLite ejecuta checkpoints automáticos cada 1,000 páginas. Si el archivo `-wal` crece continuamente de forma anómala (habitualmente por consultas analíticas externas reteniendo transacciones):
+
+```bash
+# Forzar checkpoint y reducir el archivo WAL a cero
+sqlite3 /var/lib/reqlens/reqlens.db "PRAGMA wal_checkpoint(TRUNCATE);"
+```
+
+### Procedimiento de Recuperación de Desastres
+Si una desconexión abrupta del host corrompe el archivo principal:
+```bash
+# Extraer filas recuperables a una base de datos nueva
+sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlens_recovered.db
+```
+
+---
+
+## 4. Matriz de Resolución de Problemas (Troubleshooting)
+
+| Síntoma Observado | Causa Raíz Probable | Solución Operativa |
+| :--- | :--- | :--- |
+| `Address already in use` al arrancar | El puerto (`--listen`) está ocupado por otro proceso o instancia previa. | Identificar el proceso en conflicto con `lsof -i :8080` y liberar el puerto o modificar el flag `--listen`. |
+| `database is locked` al ejecutar SQL | Una sesión externa mantiene una transacción `BEGIN EXCLUSIVE` sin cerrar. | Identificar y terminar la sesión analítica interactiva colgada. |
+| El archivo `-wal` no disminuye de tamaño | Checkpoints bloqueados por lectores concurrentes de larga duración. | Ejecutar `PRAGMA wal_checkpoint(TRUNCATE);` una vez concluidas las consultas pesadas. |
+| No aparecen peticiones recientes | Persistencia asíncrona por lotes (espera hasta 250 ms) o cola MPSC saturada. | Esperar 250 ms o inspeccionar trazas de `tracing` para descartar eventos descartados por saturación. |
+| Bodies aparecen con `[BINARY]` | El encabezado `Content-Type` no es textual o los bytes no son UTF-8 válidos. | Comportamiento normal por diseño para salvaguardar la integridad de la base. |
+| Peticiones devuelven HTTP 502 Bad Gateway | Apache está apagado o no responde en la URL `--upstream`. | Verificar el estado de Apache con `systemctl status apache2` o `curl -I http://127.0.0.1:80`. |
+
+---
+
+## 5. Observabilidad del Propio Proceso
+
+- **Trazas Estructuradas (`tracing`):** Cada conexión entrante genera un `request_id` único correlacionado. Los errores de serialización o conexión al upstream se registran con contexto sin exponer datos sensibles.
+- **Endpoints de Diagnóstico (Roadmap):**
+  - `/healthz`: Estado operativo del pipeline (salud del worker de SQLite y estado de la cola).
+  - `/metrics`: Métricas de peticiones totales, latencia p50/p95, eventos descartados y errores de disco en formato compatible con Prometheus.
+
+

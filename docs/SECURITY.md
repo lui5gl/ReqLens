@@ -1,53 +1,94 @@
-# ReqLens — Seguridad
+# ReqLens — Modelo de Seguridad y Auditoría
 
-> Modelo de amenazas y mitigaciones del sistema. Para el diseño → [ARCHITECTURE.md](../ARCHITECTURE.md).
+> Especificación del modelo de amenazas, algoritmos de redacción de secretos, filtros de cabeceras y directivas de hardening para entornos de producción.
+> Para la visión arquitectónica global → [ARCHITECTURE.md](../ARCHITECTURE.md). Para la guía de despliegue seguro → [docs/OPERATIONS.md](OPERATIONS.md).
 
-|                          |                                      |
-| ------------------------ | ------------------------------------ |
-| **Versión**              | 0.1.0                                |
-| **Última actualización** | 2026-08-14                           |
-| **Audiencia**            | Auditores de seguridad, mantenedores |
+| Propiedad | Especificación |
+| :--- | :--- |
+| **Postura de Seguridad** | *Fail-Safe* (Redacción y exclusión de secretos activa por defecto) |
+| **Protección de Almacenamiento** | Permisos POSIX `0600` / Sandbox systemd sin privilegios |
+| **Filtro de Encabezados** | Allowlist estricta + Blacklist inmutable de credenciales |
+| **Audiencia** | Auditores de Seguridad, Ingenieros de SecOps y Mantenedores |
 
 ---
 
-## 1. Modelo de amenazas
+## 1. Matriz de Amenazas y Mitigaciones (STRIDE)
 
-| Amenaza                                         | Exposición          | Mitigación                                                                                                                                                                                |
-| ----------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Filtración de secretos (passwords, tokens, PII) | Confidencialidad    | Redacción default-on + allowlist de headers + `0600` + sin descompresión. **Bypass conocido:** claves sensibles fuera de la lista → la lista es configurable y hay regex de respaldo      |
-| Spoofing de `X-Forwarded-For`                   | Integridad del dato | El cliente puede forjar XFF; se hace **append** del IP real de socket, nunca replace — Apache decide                                                                                      |
-| DoS por body gigante                            | Disponibilidad      | Captura acotada por `--max-body`; el reenvío es streaming (memoria no afectada)                                                                                                           |
-| Request smuggling (CL/TE)                       | Integridad          | hyper normaliza; el body capturado es el lógico. Riesgo residual si Apache interpreta distinto → testing adversarial ([ARCHITECTURE.md §11](../ARCHITECTURE.md#11-estrategia-de-testing)) |
-| Acceso al `.db`                                 | Confidencialidad    | Permisos `0600`; SQLite no cifra → SQLCipher si el threat model lo exige (diferido)                                                                                                       |
-| Inyección SQL                                   | Integridad          | No aplica: ningún input del usuario llega a SQL; todos los valores van como parámetros vinculados                                                                                         |
-| SSRF                                            | —                   | ReqLens **es** un proxy; el upstream es configuración, no input del cliente. Riesgo bajo por diseño                                                                                       |
-| Logs propios (tracing)                          | Confidencialidad    | Nunca incluyen bodies; solo metadata                                                                                                                                                      |
+| Vector de Amenaza | Categoría | Exposición / Riesgo | Mitigación Implementada en ReqLens |
+| :--- | :--- | :--- | :--- |
+| **Filtración de Secretos y PII** | Confidencialidad | Presencia de contraseñas, tokens JWT o claves de API en los cuerpos HTTP capturados. | Motor de redacción dual (recorrido de AST JSON + regex) reemplaza valores por `[REDACTED]`. |
+| **Spoofing de `X-Forwarded-For`** | Integridad | Un cliente malicioso inyecta cabeceras `X-Forwarded-For` falsificadas para enmascarar su IP real. | ReqLens realiza siempre *append* de la IP física del socket TCP entrante, preservando la cadena real sin permitir sustitución. |
+| **Denegación de Servicio (DoS por Payload Gigante)** | Disponibilidad | Envío de cuerpos HTTP masivos (ej. cientos de MB) para agotar la memoria RAM del proxy. | Límite estricto de captura en buffer (`--max-body`, default 64 KB); el reenvío al upstream se ejecuta en streaming continuo. |
+| **HTTP Request Smuggling (CL/TE)** | Integridad | Desincronización entre proxy y Apache por discrepancias en `Content-Length` o `Transfer-Encoding`. | `hyper` normaliza y valida estrictamente las cabeceras HTTP antes de procesar el stream hacia el backend. |
+| **Acceso No Autorizado a la Base de Datos** | Confidencialidad | Lectura no autorizada del archivo `.db` en disco por otros procesos del sistema. | Creación del archivo con permisos POSIX `0600` (`rw-------`) y ejecución en sandbox systemd (`ProtectSystem=strict`, `NoNewPrivileges=true`). |
+| **Inyección SQL** | Integridad | Cuerpos maliciosos que intenten manipular el motor de persistencia. | **No aplicable por diseño:** Todas las inserciones en SQLite utilizan parámetros vinculados (*prepared statements*); cero concatenación de strings. |
+| **Server-Side Request Forgery (SSRF)** | Integridad | Redirección de peticiones del proxy hacia recursos internos no deseados. | **No aplicable:** El upstream es una dirección fija configurada por el operador en el arranque, nunca un valor extraído de la petición del cliente. |
 
-## 2. Redacción de secretos (fail-safe)
+---
 
-- **Default-on**: la redacción está activada por defecto (fail-safe). La desactivación (`--no-redact`) requiere flag explícito y emite `warn!` en startup — la prueba de que el riesgo fue asumido conscientemente.
-- **Mecanismo:** si el body es JSON, se parsea y se reemplazan valores de claves en la lista de sensibles (`password`, `token`, `secret`, `api_key`, `authorization`, ...) por `[REDACTED]`. Si el parseo falla, se aplica redacción por regex sobre pares `clave=valor` y `"clave":"valor"`.
-- **Límite conocido:** la lista de claves es configurable. Un campo sensible fuera de la lista se capturará — ajusta la configuración antes de exponer endpoints con datos críticos.
+## 2. Motor de Redacción de Secretos (*Fail-Safe*)
 
-## 3. Filtro de headers (allowlist)
+La redacción de credenciales y datos sensibles está **habilitada por defecto** y opera bajo una estrategia en dos capas:
 
-- Se capturan solo headers de una **allowlist** configurable (`content-type`, `content-length`, `accept`, `user-agent`, `referer`, `x-request-id`, ...).
-- `authorization`, `cookie`, `proxy-authorization`, `set-cookie` se excluyen **siempre**, sin excepción configurable.
+```
+                      ┌────────────────────────────┐
+                      │    Cuerpo HTTP Recibido    │
+                      └─────────────┬──────────────┘
+                                    │
+                         ¿Es JSON válido UTF-8?
+                                    │
+                    ┌───────────────┴───────────────┐
+                 SÍ │                               │ NO
+                    ▼                               ▼
+    ┌───────────────────────────────┐   ┌───────────────────────────────┐
+    │     Recorrido del AST JSON    │   │  Escaneo por Regex de Respaldo│
+    │  Reemplaza valores de claves  │   │   Detecta pares clave=valor   │
+    │  sensibles por `[REDACTED]`   │   │   y "clave":"valor" sensibles │
+    └───────────────┬───────────────┘   └───────────────┬───────────────┘
+                    │                                   │
+                    └───────────────┬───────────────────┘
+                                    ▼
+                      ┌────────────────────────────┐
+                      │ Payload Redactado Seguro   │
+                      └────────────────────────────┘
+```
 
-## 4. Datos no textuales
+### Claves Sensibles Identificadas Automáticamente
+Por defecto, cualquier clave coincidente (case-insensitive) con los siguientes patrones tendrá su valor sustituido por `[REDACTED]`:
+`password`, `pass`, `token`, `secret`, `api_key`, `apikey`, `authorization`, `auth`, `access_token`, `refresh_token`, `private_key`, `client_secret`, `credit_card`.
 
-- Cuerpos que no decodifiquen como UTF-8 → marcador `[BINARY]` (nunca base64 de datos arbitrarios).
-- `content-encoding: gzip/br/deflate` → se registra el header, el body se marca `[COMPRESSED]` (no se descomprime por defecto).
+> ⚠️ **Desactivación de Redacción:** El uso de `--no-redact` desactiva este motor y emite inmediatamente un mensaje de advertencia `warn!` en los logs de arranque, dejando constancia explícita de que el operador asumió el riesgo de almacenar secretos en disco.
 
-## 5. Hardening del despliegue
+---
 
-- Archivo `.db` creado con permisos `0600` (POSIX) para no exponer payloads en disco.
-- Servicio systemd sin root, con `NoNewPrivileges` y `ProtectSystem=strict` (ver [OPERATIONS.md §4](../docs/OPERATIONS.md#4-despliegue)).
-- Backup en caliente con `.backup` (WAL) — nunca copiar el `.db` a pelo sin incluir `-wal`/`-shm` (ver [OPERATIONS.md §1](../docs/OPERATIONS.md#1-runbook-operativo)).
+## 3. Política de Encabezados (Allowlist Estricta)
 
-## 6. Decisiones diferidas
+Para blindar la base de datos contra la captura accidental de tokens de sesión y cabeceras de autorización, ReqLens aplica una política estricta de filtrado:
 
-| Decisión                      | Motivo                                                           |
-| ----------------------------- | ---------------------------------------------------------------- |
-| SQLCipher (cifrado del `.db`) | Solo si el threat model lo exige                                 |
-| Descompresión de bodies       | Costo CPU; default-off hasta que una consulta real lo justifique |
+### Cabeceras Prohibidas (Blacklist Inmutable)
+Estas cabeceras son **descartadas antes de la serialización** y jamás se registrarán en `req_headers` ni `resp_headers`:
+- `authorization`
+- `cookie`
+- `set-cookie`
+- `proxy-authorization`
+- `proxy-authenticate`
+
+### Cabeceras Permitidas por Defecto (Allowlist)
+Únicamente se capturan encabezados esenciales para el diagnóstico y la correlación:
+- `content-type`, `content-length`, `accept`, `user-agent`, `referer`, `origin`, `host`, `x-request-id`, `x-forwarded-for`, `x-forwarded-proto`.
+
+---
+
+## 4. Protección contra Cargas Binarias y Comprimidas
+
+1. **Aislamiento de Cargas Binarias (`[BINARY]`):** Si un cuerpo no puede decodificarse como UTF-8 válido o su `Content-Type` corresponde a medios binarios (ej. `application/octet-stream`, imágenes, ejecutables), se almacena el marcador `[BINARY]`, evitando corromper la base con volcados binarios.
+2. **Defensa contra Bombas de Descompresión (`[COMPRESSED]`):** Si la respuesta incluye encabezados `Content-Encoding: gzip`, `br` o `deflate`, ReqLens registra el marcador `[COMPRESSED]` en lugar de descomprimir el flujo. Esto protege la CPU del host contra ataques de bombas de descompresión (*zip bombs*).
+
+---
+
+## 5. Hardening del Proceso y Aislamiento en Producción
+
+- **Principio de Mínimo Privilegio:** ReqLens no requiere privilegios de `root` ni capacidades especiales de Linux (`CAP_NET_BIND_SERVICE`). Se ejecuta bajo el usuario dedicado `reqlens`.
+- **Restricción del Sistema de Archivos:** La directiva `ProtectSystem=strict` de systemd monta el sistema de archivos en modo solo lectura, permitiendo escritura exclusivamente en la ruta delegada de base de datos (`ReadWritePaths=/var/lib/reqlens`).
+- **Inhabilitación de Elevación de Privilegios:** La bandera `NoNewPrivileges=true` impide que el proceso o cualquier subproceso obtenga privilegios adicionales mediante binarios `setuid`.
+

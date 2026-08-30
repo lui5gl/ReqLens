@@ -1,249 +1,189 @@
-# ReqLens — Arquitectura
+# ReqLens — Arquitectura del Sistema
 
-> Cómo está construido ReqLens y por qué se decidió así. Para usarlo → [README.md](./README.md).
+> Especificación técnica, decisiones arquitectónicas (ADRs), modelo de concurrencia, flujo de datos y estrategia de verificación.
+> Para la visión general del producto → [README.md](README.md). Para el modelo físico de datos → [docs/DATA.md](docs/DATA.md).
+
+| Propiedad | Especificación |
+| :--- | :--- |
+| **Versión de Arquitectura** | 0.1.0 (MVP) |
+| **Lenguaje y Runtime** | Rust 2024 edition / Tokio async runtime |
+| **Capa de Red** | Hyper (HTTP/1.1 Client & Server) |
+| **Persistencia** | SQLite 3 (WAL mode) via pool monohilo dedicado |
+| **Audiencia** | Arquitectos de Software, Desarrolladores Core y Contribuidores |
 
 ---
 
-## Resumen
+## 1. Topología del Sistema e Invariantes
 
-ReqLens es un **proxy reverso** que se coloca entre los clientes y Apache. Por cada request captura quién lo envía, a qué endpoint, qué payload, y qué respondió Apache (status + body). Todo queda en una base SQLite consultable con SQL.
+ReqLens se ubica como un nodo intermedio transparente entre los clientes externos y el servidor web Apache. Su misión es capturar la trazabilidad completa del ciclo de vida HTTP sin acoplarse al ciclo de ejecución de Apache.
 
 ```
-Cliente ──▶ ReqLens (:8080) ──▶ Apache (:80) ──▶ App Backend
-                │
-                └──▶ SQLite (data/reqlens.db, WAL)
+┌──────────────┐         ┌──────────────────────────────────────────────────────────┐         ┌──────────────┐
+│   Cliente    │◀───────▶│                     ReqLens (:8080)                      │◀───────▶│ Apache (:80) │
+└──────────────┘   HTTP  │                                                          │   HTTP  └──────┬───────┘
+                         │  ┌────────────────┐     Non-blocking    ┌─────────────┐  │                │
+                         │  │  Proxy Handler │──── MPSC Channel ──▶│ Ingest Task │  │                ▼
+                         │  └────────────────┘     (1024 slots)    └──────┬──────┘  │         ┌──────────────┐
+                         └────────────────────────────────────────────────┼─────────┘         │ App Backend  │
+                                                                          │                   └──────────────┘
+                                                                          ▼ WAL Mode
+                                                                   ┌──────────────┐
+                                                                   │ SQLite (.db) │
+                                                                   └──────────────┘
 ```
 
-Dos reglas no negociables que condicionan todo el diseño:
+### Invariantes No Negociables del Diseño
 
-1. **Apache no se toca** — ni config, ni módulos, ni reinicios.
-2. **La observabilidad nunca degrada el tráfico** — si la captura o el almacenamiento fallan, el proxy sigue sirviendo (fail-open).
-
-No es un WAF, no balancea, no hace TLS, no analiza streaming.
-
----
-
-## Decisiones de diseño
-
-### Proxy en vez de módulo de Apache
-
-Capturar cuerpos con `mod_dumpio` o un módulo custom exige tocar Apache (viola la regla 1) y acoplarse a su ABI. Un proxy propio controla el 100% del ciclo HTTP sin intervenir. El coste: ReqLens pasa a ser punto único del path, así que debe fallar abierto y tener runbook (ver Operación).
-
-### hyper + tokio en vez de axum
-
-Para reenviar tráfico crudo 1:1 (headers, chunked, upgrades) conviene `hyper` directo, que expone el request/response sin re-codificarlos. `axum` añade routing que aquí es innecesario. El coste: más código de bajo nivel.
-
-### Captura asíncrona con cola acotada
-
-Escribir en la base dentro del path de respuesta haría que una base lenta degrade el tráfico. Por eso la captura va a una **cola de 1024 eventos** y un writer dedicado persiste en batches. Si la cola se llena (saturación sostenida), se **descartan eventos y se cuenta** — nunca se bloquea al cliente. Garantía global: at-most-once.
-
-### SQLite como almacén
-
-Se necesita consultar con SQL sin levantar infraestructura. SQLite lo da todo en un archivo. El coste: **escritor único**, así que el writer hace batches (100 eventos o 250 ms) y se acepta un throughput del orden de miles de req/s, no millones. Modo WAL permite consultar con `sqlite3` mientras ReqLens corre.
-
-### Redacción de secretos activada por defecto
-
-Los payloads pueden contener passwords, tokens o PII. La redacción está **on por defecto** (fail-safe): desactivarla requiere `--no-redact` explícito, que avisa en el arranque. Límite conocido: cubre una lista configurable de claves + regex de respaldo; un campo sensible fuera de la lista se capturará.
+1. **Inviolabilidad de Apache (Zero-Touch Upstream):** Apache se trata como una caja negra inmutable. No se instalan módulos en C (`mod_dumpio`), no se modifican `VirtualHosts` ni se ejecutan reinicios del servicio.
+2. **Aislamiento de Fallo (Fail-Open Absoluto):** La observabilidad es secundaria frente a la disponibilidad del servicio. Si la persistencia se satura, el disco se llena o la base de datos se corrompe, el tráfico HTTP sigue fluyendo sin interrupciones.
+3. **Latencia Cero en el Camino Crítico:** La escritura en disco ocurre fuera del hilo de respuesta. El cliente recibe el payload devuelto por Apache tan pronto como los bytes están disponibles en el socket.
 
 ---
 
-## Flujo de datos
+## 2. Registro de Decisiones de Arquitectura (ADRs)
+
+### ADR-001: Proxy Reverso Autónomo vs. Módulo Nativo de Apache
+* **Contexto:** La captura de cuerpos en Apache tradicionalmente se realiza con `mod_dumpio` o extensiones personalizadas en C.
+* **Decisión:** Desarrollar un binario independiente en Rust que actúe como proxy reverso HTTP.
+* **Justificación:** Los módulos de Apache comparten espacio de memoria con los procesos de trabajo del servidor web; un fallo en el módulo puede derribar el servidor completo. Un proxy autónomo desacopla totalmente el ciclo de vida y previene fugas de memoria en Apache.
+* **Trade-off y Mitigación:** Introduce un salto de red adicional (~0.2ms en localhost). Mitigado mediante I/O asíncrona de alto rendimiento con `tokio` y buffers reutilizables.
+
+### ADR-002: Reenvío Directo con `hyper` vs. Frameworks de Enrutamiento (`axum`, `actix-web`)
+* **Contexto:** Se requiere recibir peticiones HTTP arbitrarias y reenviarlas íntegramente al upstream.
+* **Decisión:** Construir el proxy directamente sobre la API de bajo nivel de `hyper`.
+* **Justificación:** Los frameworks web convencionales imponen capas de routing, middleware y tipado estricto de rutas que añaden sobrecarga innecesaria. `hyper` permite manipular directamente streams de bytes, gestionar cabeceras hop-by-hop y reenviar payloads crudos con fidelidad 1:1.
+* **Trade-off:** Mayor complejidad en la gestión manual de conexiones y timeouts.
+
+### ADR-003: Persistencia Asíncrona con Canal Acotado (Bounded MPSC)
+* **Contexto:** SQLite utiliza un modelo de escritor único (*single-writer*). Escribir secuencialmente en el hilo de la petición HTTP destruiría el throughput.
+* **Decisión:** Desacoplar la captura mediante un canal `tokio::sync::mpsc::channel` con capacidad fija de 1024 eventos y un actor monohilo consumidor.
+* **Justificación:** Garantiza un consumo de memoria acotado (~128 MB en el peor escenario) e independiza la latencia de red de la velocidad de sincronización de disco (`fsync`).
+* **Garantía:** Si la cola se llena debido a saturación sostenida, los eventos excedentes se descartan ordenadamente (*at-most-once*).
+
+### ADR-004: Motor Embebido SQLite en Modo WAL
+* **Contexto:** Se necesita consultar los datos con SQL estándar sin obligar al operador a provisionar infraestructura externa (PostgreSQL, ClickHouse o ELK).
+* **Decisión:** Utilizar SQLite local configurado en modo Write-Ahead Logging (`PRAGMA journal_mode=WAL`).
+* **Justificación:** SQLite almacena todo en un único archivo portable. El modo WAL permite que múltiples sesiones de lectura (ej. CLI `sqlite3` o dashboards) consulten concurrentemente sin bloquear al escritor en segundo plano.
+* **Trade-off:** Throughput limitado a ~5,000 req/s por nodo. Suficiente para la escala objetivo de monitorización por servidor.
+
+---
+
+## 3. Flujo de Datos y Ciclo de Vida de la Petición
+
+El siguiente diagrama detalla la interacción y el momento exacto en que se realiza la captura sin bloquear la entrega al cliente:
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant C as Cliente
-    participant P as ReqLens
-    participant A as Apache
-    participant I as Writer SQLite
+    participant P as ReqLens (Proxy)
+    participant A as Apache (Upstream)
+    participant W as Ingest Writer (SQLite)
 
-    C->>P: request
-    P->>P: snapshot (método, path, query, headers, body)
-    P->>A: reenvío (headers hop-by-hop filtrados, XFF append)
-    A-->>P: response
-    P->>P: snapshot (status, headers, body)
-    P-->>C: response reenviada tal cual
-    P->>I: evento (cola, no bloqueante)
-    I->>I: INSERT batch (WAL)
+    C->>P: Petición HTTP (Headers + Body)
+    Note over P: Lee body a buffer acotado (≤ max-body)<br/>Aplica redacción de secretos (JSON / Regex)
+    P->>A: Reenvío HTTP (Hop-by-hop filtrados + XFF append)
+    A-->>P: Respuesta HTTP (Status + Headers + Body)
+    Note over P: Lee prefijo de respuesta (≤ max-body)<br/>Prepara snapshot estructurado
+    P-->>C: Streaming de Respuesta (Inmediato)
+    P->>W: Enviar Evento a Canal MPSC (try_send / non-blocking)
+    Note over W: Agrupa en batch (100 reqs o 250ms)<br/>Transacción atómica INSERT en SQLite (WAL)
 ```
 
-Puntos clave del path:
+### Puntos Críticos del Pipeline de Captura
 
-- El body del request se lee **una sola vez** a buffer; ese buffer sirve para captura y para reenvío.
-- El body de la respuesta se limita a `--max-body`; el resto se reenvía en streaming (memoria acotada por request).
-- `X-Forwarded-For` se hace **append** del IP real de la socket, nunca replace — Apache decide si confiar.
-- El evento viaja por la cola en paralelo; el cliente recibe la respuesta sin esperar al disco.
-
-## Concurrencia
-
-- **Un task por rol**: acceptor, handlers por conexión, writer SQLite único, señal de shutdown.
-- **Cola de 1024 eventos**: ~1 s de ráfaga a 1 k req/s; peor caso de memoria ~128 MB.
-- **Batch de 100 eventos o 250 ms**, lo que ocurra primero. Un commit por evento sería demasiado caro (b-tree + fsync).
-- **Shutdown ordenado**: SIGTERM → dejar de aceptar → drenar requests en vuelo → drenar cola → commit final → exit 0. Si el drenado excede el timeout, exit 1 con error explícito.
-
-## Garantías
-
-| Situación               | Qué pasa                                                            |
-| ----------------------- | ------------------------------------------------------------------- |
-| Crash del proceso       | Se pierde ≤ 100 eventos o 250 ms (el último batch sin commit)       |
-| Cola llena (saturación) | Se descartan eventos; se registran y cuentan; el tráfico sigue      |
-| Disco lleno             | El batch se revierte completo; error con contexto; el tráfico sigue |
-| Shutdown limpio         | No se pierde nada                                                   |
-
-**En resumen: at-most-once.** Aceptable para telemetría; no para auditoría legal.
-
-## Edge cases del proxy
-
-- **Headers hop-by-hop** (`Connection`, `Keep-Alive`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`): se eliminan al reenviar; hyper los re-emite correctamente.
-- **Chunked**: se reenvía tal cual; la captura guarda el body lógico des-chunked.
-- **`gzip`/`br`/`deflate`**: el body se marca `[COMPRESSED]`, no se descomprime (costo de CPU injustificado por defecto).
-- **WebSocket**: solo se captura el handshake; los frames posteriores no (diferido).
-- **Upstream colgado**: timeouts configurables; si Apache no responde, `502 Bad Gateway` en vez de colgar al cliente.
-- **CRLF injection**: imposible por la validación de hyper en names/values.
+1. **Lectura Unificada de Body:** El cuerpo del request se lee exactamente una vez en memoria hasta el límite `--max-body`. El mismo buffer sirve para la inspección/redacción y para generar el stream de salida hacia Apache.
+2. **Reenvío en Streaming:** Las respuestas del backend mayores al límite de captura transmiten el resto del payload en streaming continuo directo al socket cliente, evitando acumulación de memoria.
+3. **Manejo de IP Real:** La cabecera `X-Forwarded-For` nunca se sobrescribe; se añade la IP del socket entrante al final de la cadena existente, permitiendo a Apache y al backend validar la confianza de los proxies anteriores.
 
 ---
 
-## Base de datos
+## 4. Modelo de Concurrencia y Resiliencia
 
-Tabla única `requests`, desnormalizada a propósito (nunca se consulta por un header individual, así que no merece tablas hijas):
+### Topología de Tareas Asíncronas
 
-| Columna        | Tipo        | Contenido                                            |
-| -------------- | ----------- | ---------------------------------------------------- |
-| `id`           | INTEGER PK  | Autoincremental                                      |
-| `timestamp`    | TEXT        | UTC ISO-8601 con milisegundos (ordenable, indexable) |
-| `duration_ms`  | INTEGER     | Latencia del ciclo proxy                             |
-| `client_ip`    | TEXT        | Último hop de `X-Forwarded-For`, o socket            |
-| `client_ua`    | TEXT        | User-Agent                                           |
-| `method`       | TEXT        | Método HTTP                                          |
-| `path`         | TEXT        | Endpoint (crudo)                                     |
-| `query`        | TEXT        | Query string (crudo, sin decodificar)                |
-| `req_headers`  | TEXT (JSON) | Headers de la allowlist                              |
-| `req_body`     | TEXT        | Body del request                                     |
-| `resp_status`  | INTEGER     | Status devuelto por Apache                           |
-| `resp_headers` | TEXT (JSON) | Headers de la allowlist                              |
-| `resp_body`    | TEXT        | Body de la respuesta                                 |
-
-Índices: `(timestamp)`, `(method, path)`, `(resp_status)`, `(client_ip)`. Cada uno amplifica el INSERT (~4× en total); no se añade ninguno más sin una consulta real que lo justifique.
-
-DDL idempotente en cada arranque (`CREATE TABLE IF NOT EXISTS` + índices). Migraciones futuras: tabla nueva + backfill, nunca `ALTER` destructivo.
-
-### Consultas útiles
-
-```sql
--- Últimos 50 requests
-SELECT timestamp, method, path, resp_status, duration_ms
-FROM requests ORDER BY timestamp DESC LIMIT 50;
-
--- Requests a /api/login en las últimas 24h
-SELECT * FROM requests
-WHERE path = '/api/login' AND timestamp >= datetime('now', '-1 day');
-
--- Top endpoints con status 5xx
-SELECT path, COUNT(*) AS errores FROM requests
-WHERE resp_status >= 500 GROUP BY path ORDER BY errores DESC;
-
--- Actividad por cliente
-SELECT client_ip, COUNT(*) AS requests FROM requests
-GROUP BY client_ip ORDER BY requests DESC;
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Tokio Runtime                         │
+│                                                             │
+│  ┌──────────────────┐       ┌────────────────────────────┐  │
+│  │  Acceptor Loop   │──────▶│ Connection Tasks (N Tokio) │  │
+│  └──────────────────┘       └─────────────┬──────────────┘  │
+│                                           │ try_send()      │
+│  ┌──────────────────┐                     ▼                 │
+│  │ Shutdown Handler │◀ ─ ─ ─ ─ ─ ─  ┌───────────┐           │
+│  └──────────────────┘               │ MPSC 1024 │           │
+│                                     └─────┬─────┘           │
+│                                           │ recv_many()     │
+│                                           ▼                 │
+│                             ┌────────────────────────────┐  │
+│                             │ Ingest Task (Single-Writer)│  │
+│                             └─────────────┬──────────────┘  │
+└───────────────────────────────────────────┼─────────────────┘
+                                            ▼
+                                     ┌──────────────┐
+                                     │ SQLite (WAL) │
+                                     └──────────────┘
 ```
 
-### Reglas de contenido
+### Matriz de Resiliencia (*At-Most-Once Delivery*)
 
-- Solo headers de una allowlist; `authorization`, `cookie`, `set-cookie` **nunca** se capturan.
-- Binario → `[BINARY]`; comprimido → `[COMPRESSED]`; sensible → `[REDACTED]`; excede `--max-body` → prefijo + `[TRUNCATED]`.
+ReqLens prioriza la continuidad del negocio frente a la integridad analítica exhaustiva:
 
-### Crecimiento
-
-≈ 500 B + bodies por fila. A 1 k req/s con bodies de 1 KB promedio → **~1.5 GB/día**. Este número decide cuándo activar particionado/retención (roadmap).
-
----
-
-## Seguridad
-
-| Amenaza                       | Mitigación                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| Filtración de secretos        | Redacción default-on + allowlist de headers + archivo `0600`                           |
-| Spoofing de `X-Forwarded-For` | Se hace append del IP real de socket, nunca replace                                    |
-| DoS por body gigante          | Captura acotada por `--max-body`; el reenvío es streaming                              |
-| Request smuggling (CL/TE)     | hyper normaliza; el body capturado es el lógico. Riesgo residual → testing adversarial |
-| Acceso al `.db`               | Permisos `0600`; SQLite no cifra (SQLCipher diferido)                                  |
-| Inyección SQL                 | No aplica: todos los valores van como parámetros vinculados, nunca concatenados        |
-| SSRF                          | ReqLens es un proxy; el upstream es configuración, no input del cliente                |
-
-- Redacción: si el body es JSON, se reemplazan valores de claves sensibles (`password`, `token`, `secret`, `api_key`...) por `[REDACTED]`. Si no es JSON, regex sobre pares `clave=valor`.
-- Servicio sin root con hardening systemd (`NoNewPrivileges`, `ProtectSystem=strict`) — ver Operación.
+| Contingencia | Impacto en Tráfico HTTP | Impacto en Telemetría / Persistencia |
+| :--- | :--- | :--- |
+| **Crash inesperado del proceso** | Se restablece con reinicio automático de systemd. | Pérdida acotada al lote en memoria sin commitear ($\le$ 100 eventos o $\le$ 250 ms). |
+| **Saturación sostenida (>1k req/s)** | Ninguno. El tráfico fluye a máxima velocidad de red. | Descarte controlado de eventos por cola llena; se incrementa el contador de drops en logs. |
+| **Agotamiento de espacio en disco** | Ninguno. El proxy sigue atendiendo peticiones. | Rollback del lote fallido; logs de advertencia continuos hasta liberar espacio. |
+| **Parada limpia (SIGTERM/SIGINT)** | Cierre ordenado de conexiones activas. | Drenado completo de la cola MPSC y commit final a SQLite antes del exit 0. |
 
 ---
 
-## Operación
+## 5. Tratamiento de Casos Límite del Protocolo HTTP
 
-```bash
-# Backup en caliente (seguro con WAL; nunca copies el .db a pelo sin -wal/-shm)
-sqlite3 data/reqlens.db ".backup 'reqlens.backup.db'"
-
-# Integridad
-sqlite3 data/reqlens.db "PRAGMA integrity_check;"
-
-# Si el -wal crece sin límite (sesión sqlite3 abierta sin commit)
-sqlite3 data/reqlens.db "PRAGMA wal_checkpoint(TRUNCATE);"
-```
-
-Troubleshooting rápido:
-
-| Síntoma                    | Causa                             | Solución                                      |
-| -------------------------- | --------------------------------- | --------------------------------------------- |
-| Puerto ocupado al arrancar | Listener en uso                   | Cambia `--listen`                             |
-| `database is locked`       | Transacción `sqlite3` abierta     | Ciérrala; el writer no bloquea lecturas (WAL) |
-| No aparecen eventos        | Persistencia asíncrona (≤ 250 ms) | Reintenta; revisa logs de ingest              |
-| `[BINARY]` en bodies       | Content-Type no textual           | Esperado por diseño                           |
-
-Despliegue: binario estático + unit file systemd (usuario dedicado, sin root, `ReadWritePaths` solo al directorio de datos). Ejemplo completo en `README.md` o se puede generar con `cargo install --path . --locked`.
-
-## Rendimiento esperado
-
-- Objetivo: ≥ 5 k req/s en hardware commodity (NVMe, WAL).
-- Coste por request: 1 read de body (limitado) + 1 read de respuesta (limitado) + 1 INSERT con 4 índices.
-- Memoria en vuelo: ≤ 2 × `--max-body` por request (~12.8 MB con ~100 concurrentes y default).
+- **Cabeceras Hop-by-Hop:** Se eliminan sistemáticamente de la petición y la respuesta (`Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailers`, `Transfer-Encoding`, `Upgrade`) para que `hyper` gestione la sesión TCP de forma autónoma con el upstream.
+- **Transferencias Chunked:** Se reenvían en formato chunked; la capa de captura desfragmenta el payload para registrar el body lógico estructurado en la base de datos.
+- **Cargas Comprimidas:** Peticiones o respuestas con `Content-Encoding: gzip/br/deflate` se registran con el marcador `[COMPRESSED]`. Descomprimir en vuelo añadiría un consumo inaceptable de CPU y riesgo de ataques de descompresión (*zip bombs*).
+- **Timeouts de Upstream:** Si Apache no responde dentro del límite configurado, ReqLens cierra la conexión hacia el backend y emite un `502 Bad Gateway` con estructura limpia hacia el cliente.
 
 ---
 
-## Estructura del código
+## 6. Arquitectura de Módulos (Screaming Architecture)
+
+El árbol de código refleja directamente los dominios funcionales del sistema:
 
 ```
 src/
-├── main.rs                      # Bootstrap: config → runtime → server + shutdown
-├── config/                      # CLI + env, defaults seguros
-├── proxy/                       # Listener, reenvío, cliente upstream
-├── capture/                     # Snapshots de request/response, redacción, límites
-├── ingest/                      # Evento, schema SQLite, writer con batch
-└── error.rs                     # Errores tipados, nunca silenciados
+├── main.rs          # Bootstrap del runtime, inyección de dependencias y graceful shutdown
+├── config/          # Parseo de CLI / variables de entorno con validación fail-fast
+├── proxy/           # Motor de red HTTP (Hyper), gestión de upstream y conexión TCP
+├── capture/         # Normalización de eventos, allowlist de headers y redacción de secretos
+├── ingest/          # Schema SQLite, canal MPSC y persistencia por lotes transaccionales
+└── error.rs         # Catálogo de errores tipados de dominio (thiserror)
 ```
 
-Reglas de dependencia:
-
-```
-config ◀───── main
-   ▲
-proxy ──▶ capture ──▶ ingest
-   │         │
-   └─────────┴──▶ error (compartido)
-```
-
-- `proxy` observa el tráfico vía `capture`, nunca al revés.
-- `capture` produce eventos; `ingest` los persiste. No se conocen entre sí.
-- Ningún dominio conoce el framework HTTP salvo `proxy`.
-
-## Testing
-
-| Nivel       | Cobertura                                                                 |
-| ----------- | ------------------------------------------------------------------------- |
-| Unit        | Redacción (incl. intentos de bypass), límites, allowlist, DDL idempotente |
-| Integración | Snapshots, writer (commit y rollback) con SQLite `:memory:`               |
-| E2E         | Proxy completo → upstream mock → validación de filas insertadas           |
-| Adversarial | Cola llena, disco lleno, crash a mitad de batch, smuggling CL/TE          |
-| Propiedades | Un password real jamás aparece tras la redacción                          |
+### Reglas de Dependencia Unidireccional
+- `proxy` únicamente depende de `capture` para generar los snapshots.
+- `capture` produce eventos agnósticos que envía a `ingest`.
+- `ingest` desconoce por completo la existencia de HTTP, sockets o `hyper`.
+- Los errores son tipados y nunca se silencian en ninguna capa.
 
 ---
 
-## Pendiente (no implementar aún)
+## 7. Estrategia de Verificación y Testing
 
-Particionado por fecha + retención · `/metrics` y `/healthz` · exportación a NDJSON/CSV · filtros de captura por path · descompresión de bodies · captura de WebSocket frames · modo offline (analizar `access.log`).
+| Nivel de Test | Alcance y Aislamiento | Ejecución |
+| :--- | :--- | :--- |
+| **Unit Tests** | Algoritmos de redacción JSON, expresiones regulares de respaldo, allowlist de cabeceras y límites de truncado de buffer. | En memoria, ejecución paralela ultra-rápida. |
+| **Integration Tests** | Writer transaccional de SQLite, verificación de commits por tamaño (100) y tiempo (250ms), rollback ante errores usando `:memory:`. | Pruebas asíncronas con base SQLite en memoria. |
+| **End-to-End (E2E)** | Proxy completo escuchando en socket real contra un servidor upstream mock, verificando la correspondencia exacta de filas en SQLite. | Instancias locales aisladas en puertos dinámicos. |
+| **Adversarial / Chaos** | Simulación de saturación de cola MPSC, desconexión de upstream y validación de política *fail-open*. | Inyección de fallos controlada en tests de estrés. |
+
+---
+
+## 📚 Enlaces de Referencia
+- [docs/DATA.md](docs/DATA.md) — Definición DDL, diccionario de columnas y recetario SQL.
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) — Guía SRE, unidad systemd, backups y troubleshooting.
+- [docs/SECURITY.md](docs/SECURITY.md) — Modelo de amenazas, redacción de secretos y hardening.
+
+
