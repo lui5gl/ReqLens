@@ -1,15 +1,10 @@
 [package]
 name = "reqlens"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 
 [dependencies]
-tokio = { version = "1.43", features = ["full"] }
-hyper = { version = "1.5", features = ["full"] }
-hyper-util = { version = "0.1", features = ["full"] }
-http-body-util = "0.1"
-bytes = "1.10"
 clap = { version = "4.5", features = ["derive", "env"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -21,10 +16,13 @@ thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 ratatui = "0.29"
 crossterm = "0.28"
-libc = "0.2"
+httparse = "1.9"
+signal-hook = "0.3"
 
 [dev-dependencies]
+tokio = { version = "1.43", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tempfile = "3.17"
+
 
 

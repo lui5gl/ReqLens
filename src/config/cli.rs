@@ -110,7 +110,8 @@ pub enum Commands {
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub listen_addr: SocketAddr,
-    pub upstream_uri: hyper::Uri,
+    pub upstream_addr: String,
+    pub upstream_host: String,
     pub db_path: PathBuf,
     pub max_body: usize,
     pub redact_enabled: bool,

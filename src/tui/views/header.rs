@@ -23,7 +23,7 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &A
         ),
         Span::raw("-> "),
         Span::styled(
-            format!("Upstream: {} ", config.upstream_uri),
+            format!("Upstream: {} ", config.upstream_addr),
             Style::default().fg(Color::Green),
         ),
     ]);

@@ -1,52 +1,44 @@
-use bytes::Bytes;
-use std::sync::Arc;
-use std::time::Duration;
-
-use http_body_util::Full;
-use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
 use rusqlite::Connection;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 use tempfile::NamedTempFile;
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 
 use reqlens::config::cli::AppConfig;
 use reqlens::ingest;
 use reqlens::proxy;
 
-#[tokio::test]
-async fn test_e2e_proxy_and_telemetry_capture() {
-    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+#[test]
+fn test_e2e_proxy_and_telemetry_capture() {
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let upstream_addr = upstream_listener.local_addr().unwrap();
 
-    let (upstream_shutdown_tx, mut upstream_shutdown_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = &mut upstream_shutdown_rx => break,
-                res = upstream_listener.accept() => {
-                    if let Ok((stream, _)) = res {
-                        let io = TokioIo::new(stream);
-                        tokio::spawn(async move {
-                            let service = service_fn(|_req: Request<hyper::body::Incoming>| async {
-                                Ok::<_, std::convert::Infallible>(
-                                    Response::builder()
-                                        .status(StatusCode::OK)
-                                        .header("Content-Type", "application/json")
-                                        .body(Full::new(Bytes::from(r#"{"status":"created","user_id":42}"#)))
-                                        .unwrap(),
-                                )
-                            });
-                            let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, service).await;
-                        });
-                    }
+    let upstream_running = Arc::new(AtomicBool::new(true));
+    let up_r = Arc::clone(&upstream_running);
+
+    let upstream_thread = thread::spawn(move || {
+        upstream_listener.set_nonblocking(true).unwrap();
+        while up_r.load(Ordering::Relaxed) {
+            match upstream_listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    let resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{\"status\":\"created\",\"user_id\":42}";
+                    let _ = stream.write_all(resp);
+                    let _ = stream.flush();
                 }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
             }
         }
     });
 
-    let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let proxy_addr = proxy_listener.local_addr().unwrap();
     drop(proxy_listener);
 
@@ -55,7 +47,8 @@ async fn test_e2e_proxy_and_telemetry_capture() {
 
     let config = Arc::new(AppConfig {
         listen_addr: proxy_addr,
-        upstream_uri: format!("http://{}", upstream_addr).parse().unwrap(),
+        upstream_addr: format!("{}", upstream_addr),
+        upstream_host: "127.0.0.1".to_string(),
         db_path: db_path.clone(),
         max_body: 65536,
         redact_enabled: true,
@@ -63,40 +56,38 @@ async fn test_e2e_proxy_and_telemetry_capture() {
     });
 
     let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(db_path.clone());
-    let (proxy_shutdown_tx, proxy_shutdown_rx) = oneshot::channel();
+    let proxy_running = Arc::new(AtomicBool::new(true));
 
     let proxy_config = Arc::clone(&config);
     let proxy_ingest = ingest_sender.clone();
-    let proxy_task = tokio::spawn(async move {
-        proxy::run_server(proxy_config, proxy_ingest, async move {
-            let _ = proxy_shutdown_rx.await;
-        })
-        .await
-        .unwrap();
+    let proxy_r = Arc::clone(&proxy_running);
+
+    let proxy_handle = thread::spawn(move || {
+        proxy::run_server(proxy_config, proxy_ingest, proxy_r).unwrap();
     });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    thread::sleep(Duration::from_millis(100));
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("http://{}/api/v1/users", proxy_addr))
-        .header("Content-Type", "application/json")
-        .header("Authorization", "Bearer secret-token-should-not-persist")
-        .body(r#"{"username":"testuser","password":"mypassword123"}"#)
-        .send()
-        .await
-        .expect("Request failed");
+    let mut client_stream = TcpStream::connect(proxy_addr).expect("Connect to proxy failed");
+    let req_payload = "POST /api/v1/users HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAuthorization: Bearer secret-token-should-not-persist\r\nContent-Length: 48\r\n\r\n{\"username\":\"testuser\",\"password\":\"mypassword123\"}";
+    client_stream.write_all(req_payload.as_bytes()).unwrap();
+    client_stream.flush().unwrap();
 
-    assert_eq!(resp.status(), 200);
-    let resp_json: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(resp_json["status"], "created");
+    let mut client_resp = Vec::new();
+    client_stream.read_to_end(&mut client_resp).unwrap();
+    let resp_str = String::from_utf8_lossy(&client_resp);
 
-    let _ = proxy_shutdown_tx.send(());
-    let _ = proxy_task.await;
-    let _ = upstream_shutdown_tx.send(());
+    assert!(resp_str.contains("200 OK"));
+    assert!(resp_str.contains(r#"{"status":"created","user_id":42}"#));
+
+    proxy_running.store(false, Ordering::Relaxed);
+    let _ = proxy_handle.join();
+
+    upstream_running.store(false, Ordering::Relaxed);
+    let _ = upstream_thread.join();
 
     drop(ingest_sender);
-    let _ = tokio::time::timeout(Duration::from_secs(3), ingest_handle).await;
+    let _ = ingest_handle.join();
 
     let conn = Connection::open(&db_path).unwrap();
     let mut stmt = conn

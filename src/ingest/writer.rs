@@ -3,15 +3,14 @@ use crate::error::Result;
 use crate::ingest::schema::initialize_schema;
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
-use tokio::sync::mpsc::Receiver;
-use tokio::time::interval;
 use tracing::{error, info};
 
 pub const BATCH_SIZE: usize = 100;
 pub const FLUSH_INTERVAL_MS: u64 = 250;
 
-pub async fn run_writer(db_path: PathBuf, mut rx: Receiver<HttpEvent>) {
+pub fn run_writer(db_path: PathBuf, rx: Receiver<HttpEvent>) {
     let mut conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -27,31 +26,27 @@ pub async fn run_writer(db_path: PathBuf, mut rx: Receiver<HttpEvent>) {
     info!("SQLite database initialized in WAL mode at {:?}", db_path);
 
     let mut buffer = Vec::with_capacity(BATCH_SIZE);
-    let mut ticker = interval(Duration::from_millis(FLUSH_INTERVAL_MS));
+    let flush_timeout = Duration::from_millis(FLUSH_INTERVAL_MS);
 
     loop {
-        tokio::select! {
-            _ = ticker.tick() => {
+        match rx.recv_timeout(flush_timeout) {
+            Ok(ev) => {
+                buffer.push(ev);
+                if buffer.len() >= BATCH_SIZE {
+                    flush_batch(&mut conn, &mut buffer);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
                 if !buffer.is_empty() {
                     flush_batch(&mut conn, &mut buffer);
                 }
             }
-            event = rx.recv() => {
-                match event {
-                    Some(ev) => {
-                        buffer.push(ev);
-                        if buffer.len() >= BATCH_SIZE {
-                            flush_batch(&mut conn, &mut buffer);
-                        }
-                    }
-                    None => {
-                        if !buffer.is_empty() {
-                            flush_batch(&mut conn, &mut buffer);
-                        }
-                        info!("Ingest channel closed, writer stopped.");
-                        break;
-                    }
+            Err(RecvTimeoutError::Disconnected) => {
+                if !buffer.is_empty() {
+                    flush_batch(&mut conn, &mut buffer);
                 }
+                info!("Ingest channel closed, writer stopped.");
+                break;
             }
         }
     }

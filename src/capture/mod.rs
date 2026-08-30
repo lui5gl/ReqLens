@@ -1,9 +1,6 @@
 pub mod headers;
 pub mod redact;
 
-use bytes::Bytes;
-use hyper::HeaderMap;
-
 #[derive(Debug, Clone)]
 pub struct HttpEvent {
     pub timestamp: String,
@@ -21,8 +18,8 @@ pub struct HttpEvent {
 }
 
 pub fn process_body(
-    body_bytes: &Bytes,
-    headers: &HeaderMap,
+    body_bytes: &[u8],
+    headers: &[(String, String)],
     max_body: usize,
     redact_enabled: bool,
 ) -> Option<String> {
@@ -30,8 +27,9 @@ pub fn process_body(
         return None;
     }
 
-    if let Some(encoding) = headers.get("content-encoding")
-        && let Ok(enc_str) = encoding.to_str()
+    if let Some((_, enc_str)) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-encoding"))
     {
         let enc_lower = enc_str.to_ascii_lowercase();
         if enc_lower.contains("gzip") || enc_lower.contains("br") || enc_lower.contains("deflate") {
@@ -43,7 +41,7 @@ pub fn process_body(
     let slice = if is_truncated {
         &body_bytes[..max_body]
     } else {
-        body_bytes.as_ref()
+        body_bytes
     };
 
     let text = match std::str::from_utf8(slice) {

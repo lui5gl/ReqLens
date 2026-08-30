@@ -3,13 +3,37 @@ pub mod cli;
 use self::cli::{AppConfig, CliArgs, Commands};
 use crate::error::{ReqLensError, Result};
 use clap::Parser;
-use hyper::Uri;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 pub fn parse_cli() -> CliArgs {
     CliArgs::parse()
+}
+
+pub fn parse_upstream(raw: &str) -> Result<(String, String)> {
+    let clean = raw
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    let host_port_part = clean.split('/').next().unwrap_or("");
+    let parts: Vec<&str> = host_port_part.split(':').collect();
+    let host = parts[0];
+    if host.is_empty() {
+        return Err(ReqLensError::Config(format!(
+            "Invalid upstream address '{}'",
+            raw
+        )));
+    }
+    let port = if parts.len() > 1 {
+        parts[1]
+            .parse::<u16>()
+            .map_err(|e| ReqLensError::Config(format!("Invalid upstream port: {}", e)))?
+    } else if raw.starts_with("https://") {
+        443
+    } else {
+        80
+    };
+    Ok((format!("{}:{}", host, port), host.to_string()))
 }
 
 pub fn resolve_config(
@@ -24,16 +48,7 @@ pub fn resolve_config(
         .parse()
         .map_err(|e| ReqLensError::Config(format!("Invalid listen address '{}': {}", listen, e)))?;
 
-    let upstream_uri: Uri = upstream
-        .parse()
-        .map_err(|e| ReqLensError::Config(format!("Invalid upstream URI '{}': {}", upstream, e)))?;
-
-    if upstream_uri.scheme().is_none() || upstream_uri.authority().is_none() {
-        return Err(ReqLensError::Config(format!(
-            "Upstream URI '{}' must include scheme (e.g. http://) and host:port",
-            upstream
-        )));
-    }
+    let (upstream_addr, upstream_host) = parse_upstream(upstream)?;
 
     if max_body == 0 {
         return Err(ReqLensError::Config(
@@ -55,7 +70,8 @@ pub fn resolve_config(
 
     Ok(AppConfig {
         listen_addr,
-        upstream_uri,
+        upstream_addr,
+        upstream_host,
         db_path,
         max_body,
         redact_enabled: !no_redact,
