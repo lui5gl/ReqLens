@@ -5,8 +5,9 @@
 
 | Propiedad | Especificación |
 | :--- | :--- |
-| **Versión de Modelo** | 0.1.4 |
+| **Versión de Modelo** | 0.1.5 |
 | **Motor de Base de Datos** | SQLite 3 embebido |
+
 
 
 

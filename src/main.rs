@@ -12,6 +12,8 @@ use reqlens::proxy;
 use reqlens::tui;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ops::auto_deploy_to_bin();
+
     let args = parse_cli();
 
     match args.command {

@@ -3,6 +3,26 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+pub fn auto_deploy_to_bin() {
+    let Ok(current_exe) = std::env::current_exe() else {
+        return;
+    };
+    let target_bin = Path::new("/usr/local/bin/reqlens");
+
+    if current_exe != target_bin && fs::copy(&current_exe, target_bin).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = fs::metadata(target_bin).map(|m| m.permissions()) {
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(target_bin, perms);
+            }
+        }
+        println!("💡 ReqLens se ha copiado automáticamente a /usr/local/bin/reqlens");
+        println!("   (Ya disponible globalmente desde cualquier directorio como 'reqlens')\n");
+    }
+}
+
 pub fn install_service(
     listen: &str,
     upstream: &str,
