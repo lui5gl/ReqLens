@@ -11,8 +11,7 @@ use reqlens::ops;
 use reqlens::proxy;
 use reqlens::tui;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_cli();
 
     match args.command {
@@ -59,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 redact_enabled: true,
                 tui_enabled: true,
             };
-            tokio::task::spawn_blocking(move || tui::run_tui_app(&tui_cfg)).await??;
+            tui::run_tui_app(&tui_cfg)?;
             return Ok(());
         }
         _ => {}
@@ -67,6 +66,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::load_config()?;
 
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!(
+                "\n❌ Error al inicializar el runtime asíncrono de red: {}",
+                e
+            );
+            if e.raw_os_error() == Some(38) {
+                eprintln!("\n⚠️  DETECCIÓN DE KERNEL LINUX LEGACY (Kernel < 2.6.32 / CentOS 5.x):");
+                eprintln!(
+                    "   El kernel de este sistema (2.6.18) no posee la llamada al sistema 'epoll_create1' (añadida en 2.6.27)."
+                );
+                eprintln!("   Para ejecutar en CentOS 5, compila un shim de compatibilidad con:");
+                eprintln!("   gcc -Wall -O2 -fPIC -shared -o ./epoll_shim.so epoll_shim.c");
+                eprintln!("   Y ejecuta con: LD_PRELOAD=./epoll_shim.so reqlens");
+                eprintln!(
+                    "   (Nota: En CentOS 6+, CentOS 7/8/9, Debian, Ubuntu, Alpine y RHEL 6+ funciona de forma 100% nativa).\n"
+                );
+            }
+            std::process::exit(1);
+        }
+    };
+
+    runtime.block_on(run_async_server(config))
+}
+
+async fn run_async_server(
+    config: reqlens::config::cli::AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !config.tui_enabled {
         tracing_subscriber::registry()
             .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
