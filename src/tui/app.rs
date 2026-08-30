@@ -33,7 +33,7 @@ pub fn run_tui_app(config: &AppConfig) -> Result<()> {
     }
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = create_terminal(backend);
+    let terminal = create_terminal(backend);
     let mut terminal = match terminal {
         Ok(terminal) => terminal,
         Err(error) => {
@@ -53,7 +53,9 @@ pub fn run_tui_app(config: &AppConfig) -> Result<()> {
     res
 }
 
-fn create_terminal(backend: CrosstermBackend<Stdout>) -> Result<Terminal<CrosstermBackend<Stdout>>> {
+fn create_terminal(
+    backend: CrosstermBackend<Stdout>,
+) -> Result<Terminal<CrosstermBackend<Stdout>>> {
     match crossterm::terminal::size() {
         Ok(_) => Ok(Terminal::new(backend)?),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
