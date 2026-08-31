@@ -2,6 +2,7 @@ pub mod forward;
 pub mod handler;
 
 use crate::config::cli::AppConfig;
+use crate::config::validate_proxy_endpoints;
 use crate::error::Result;
 use crate::ingest::IngestSender;
 use std::net::TcpListener;
@@ -28,6 +29,7 @@ pub fn run_server(
     ingest: IngestSender,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
+    validate_proxy_endpoints(config.listen_addr, &config.upstream_addr)?;
     let listener = TcpListener::bind(config.listen_addr)?;
     info!("ReqLens listening on http://{}", config.listen_addr);
     info!(

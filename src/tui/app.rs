@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -81,11 +81,11 @@ fn run_loop(
     while !state.should_quit {
         terminal.draw(|frame| render_ui(frame, state, config))?;
 
-        if event::poll(tick_rate).unwrap_or(false) {
-            if let Ok(Event::Key(key)) = event::read()
-                && key.kind == KeyEventKind::Press
+        if event::poll(tick_rate)? {
+            if let Event::Key(key) = event::read()?
+                && key.kind != KeyEventKind::Release
             {
-                handle_key_event(state, key.code);
+                handle_key_event(state, key);
             }
         } else {
             state.reload_data();
@@ -95,10 +95,17 @@ fn run_loop(
     Ok(())
 }
 
-fn handle_key_event(state: &mut TuiState, code: KeyCode) {
+fn handle_key_event(state: &mut TuiState, key: KeyEvent) {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.should_quit = true;
+        return;
+    }
+
+    let code = key.code;
     if state.selected_detail.is_some() {
         match code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.toggle_detail(),
+            KeyCode::Char('q') => state.should_quit = true,
+            KeyCode::Esc | KeyCode::Enter => state.toggle_detail(),
             KeyCode::Up | KeyCode::Char('k') => state.scroll_detail_up(),
             KeyCode::Down | KeyCode::Char('j') => state.scroll_detail_down(),
             _ => {}

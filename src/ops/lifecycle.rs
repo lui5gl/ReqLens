@@ -1,3 +1,4 @@
+use crate::config::{parse_upstream, validate_proxy_endpoints};
 use crate::error::Result;
 use std::fs;
 use std::path::Path;
@@ -31,6 +32,12 @@ pub fn install_service(
     no_redact: bool,
 ) -> Result<()> {
     println!("📦 Instalando ReqLens en el sistema...");
+
+    let listen_addr = listen.parse().map_err(|error| {
+        crate::error::ReqLensError::Config(format!("Invalid listen address '{listen}': {error}"))
+    })?;
+    let (upstream_addr, _) = parse_upstream(upstream)?;
+    validate_proxy_endpoints(listen_addr, &upstream_addr)?;
 
     let current_exe = std::env::current_exe()?;
     let target_bin = Path::new("/usr/local/bin/reqlens");
