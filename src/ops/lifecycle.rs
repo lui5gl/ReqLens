@@ -40,6 +40,45 @@ pub fn auto_deploy_to_bin() {
 
 pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
     println!("📦 Instalando ReqLens en el sistema...");
+    let InstallConfig {
+        mode,
+        interface,
+        server_ip,
+        port,
+        listen,
+        upstream,
+        db_path,
+        max_body,
+        no_redact,
+    } = config;
+
+    let listen_addr = listen.parse().map_err(|error| {
+        crate::error::ReqLensError::Config(format!("Invalid listen address '{listen}': {error}"))
+    })?;
+    let (upstream_addr, _) = parse_upstream(upstream)?;
+    validate_proxy_endpoints(listen_addr, &upstream_addr)?;
+
+    let InstallConfig {
+        mode,
+        interface,
+        server_ip,
+        port,
+        listen,
+        upstream,
+        db_path,
+        max_body,
+        no_redact,
+    } = config;
+
+    if mode == CaptureMode::Proxy {
+        let listen_addr = listen.parse().map_err(|error| {
+            crate::error::ReqLensError::Config(format!(
+                "Invalid listen address '{listen}': {error}"
+            ))
+        })?;
+        let (upstream_addr, _) = parse_upstream(upstream)?;
+        validate_proxy_endpoints(listen_addr, &upstream_addr)?;
+    }
 
     if config.mode == CaptureMode::Proxy {
         let listen_addr = config.listen.parse().map_err(|error| {
