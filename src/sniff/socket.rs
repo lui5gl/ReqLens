@@ -4,7 +4,7 @@ use std::mem;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::Duration;
 
-const ETH_P_IP: u16 = 0x0800;
+const ETH_P_ALL: u16 = 0x0003;
 
 pub struct PacketSocket {
     fd: OwnedFd,
@@ -16,7 +16,7 @@ impl PacketSocket {
             libc::socket(
                 libc::AF_PACKET,
                 libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-                i32::from(ETH_P_IP.to_be()),
+                i32::from(ETH_P_ALL.to_be()),
             )
         };
         if fd < 0 {
@@ -38,7 +38,7 @@ impl PacketSocket {
 
         let address = libc::sockaddr_ll {
             sll_family: libc::AF_PACKET as u16,
-            sll_protocol: ETH_P_IP.to_be(),
+            sll_protocol: ETH_P_ALL.to_be(),
             sll_ifindex: interface_index,
             sll_hatype: 0,
             sll_pkttype: 0,
