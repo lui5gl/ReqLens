@@ -4,8 +4,9 @@ use std::thread;
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use reqlens::config::cli::Commands;
-use reqlens::config::{self, parse_cli, parse_upstream};
+use reqlens::config::cli::{AppConfig, CaptureMode, Commands};
+use reqlens::config::installed::load_installed_config;
+use reqlens::config::{self, parse_cli};
 use reqlens::ingest;
 use reqlens::ops;
 use reqlens::proxy;
@@ -93,19 +94,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             drop(ingest_sender);
             let _ = ingest_handle.join();
-            return Ok(());
+            Ok(())
         }
         Some(Commands::Status { db_path }) => {
-            ops::print_status(&db_path)?;
-            return Ok(());
+            let dashboard_config = dashboard_config(db_path)?;
+            ops::print_status(&dashboard_config.db_path)?;
+            Ok(())
         }
         Some(Commands::Restart) => {
             ops::restart_service()?;
-            return Ok(());
+            Ok(())
         }
         Some(Commands::Disable) => {
             ops::disable_service()?;
-            return Ok(());
+            Ok(())
         }
         Some(Commands::Install {
             mode,
@@ -129,33 +131,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_body,
                 no_redact,
             })?;
-            return Ok(());
+            Ok(())
         }
         Some(Commands::Uninstall { purge }) => {
             ops::uninstall_service(purge)?;
-            return Ok(());
+            Ok(())
         }
-        Some(Commands::Tui {
-            db_path,
+        Some(Commands::Tui { db_path }) => {
+            tui::run_tui_app(&dashboard_config(db_path)?)?;
+            Ok(())
+        }
+        Some(Commands::Start {
             listen,
             upstream,
+            db_path,
+            max_body,
+            no_redact,
+            tui,
         }) => {
-            let (upstream_addr, _) = parse_upstream(&upstream)?;
-            let tui_cfg = TuiConfig {
-                db_path,
-                source: TuiSource::Proxy {
-                    listen,
-                    upstream: upstream_addr,
-                },
-            };
-            tui::run_tui_app(&tui_cfg)?;
-            return Ok(());
+            let config =
+                config::resolve_config(&listen, &upstream, db_path, max_body, no_redact, tui)?;
+            run_proxy(config)?;
+            Ok(())
         }
-        _ => {}
+        None => {
+            tui::run_tui_app(&dashboard_config(None)?)?;
+            Ok(())
+        }
     }
+}
 
-    let config = config::load_config()?;
-
+fn run_proxy(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     if !config.tui_enabled {
         tracing_subscriber::registry()
             .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -209,6 +215,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("ReqLens shutdown completed cleanly.");
     Ok(())
+}
+
+fn dashboard_config(
+    db_path_override: Option<std::path::PathBuf>,
+) -> Result<TuiConfig, Box<dyn std::error::Error>> {
+    let installed = load_installed_config()?;
+    let db_path = db_path_override
+        .or_else(|| installed.as_ref().map(|config| config.db_path.clone()))
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/lib/reqlens/reqlens.db"));
+
+    let source = match installed {
+        Some(config) if config.mode == CaptureMode::Sniff => TuiSource::Passive {
+            interface: config.interface,
+            server_ip: config.server_ip,
+            port: config.port,
+        },
+        Some(config) => TuiSource::Proxy {
+            listen: config.listen,
+            upstream: config.upstream,
+        },
+        None => TuiSource::Passive {
+            interface: "unknown".into(),
+            server_ip: None,
+            port: 80,
+        },
+    };
+
+    Ok(TuiConfig { db_path, source })
 }
 
 fn register_shutdown_signals(running: &Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {

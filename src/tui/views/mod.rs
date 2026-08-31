@@ -28,6 +28,12 @@ pub fn render_ui(frame: &mut Frame, state: &TuiState, config: &TuiConfig) {
     footer::render_footer(frame, chunks[3]);
 
     if let Some(detail) = &state.selected_detail {
-        modal::render_detail_modal(frame, frame.area(), detail, state.detail_scroll);
+        modal::render_detail_modal(
+            frame,
+            frame.area(),
+            detail,
+            state.detail_scroll,
+            state.detail_notice.as_deref(),
+        );
     }
 }

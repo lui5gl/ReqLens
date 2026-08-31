@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -7,7 +8,7 @@ pub const DEFAULT_UPSTREAM: &str = "http://127.0.0.1:80";
 pub const DEFAULT_DB_PATH: &str = "./data/reqlens.db";
 pub const DEFAULT_MAX_BODY: usize = 65536;
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 pub enum CaptureMode {
     /// Captura pasiva; Apache conserva su puerto y ReqLens solo observa
     Sniff,
@@ -97,19 +98,15 @@ pub enum Commands {
     },
     /// Abre el dashboard interactivo TUI para explorar peticiones y errores
     Tui {
-        #[arg(long, env = "REQLENS_DB_PATH", default_value = DEFAULT_DB_PATH)]
-        db_path: PathBuf,
-
-        #[arg(long, env = "REQLENS_LISTEN", default_value = DEFAULT_LISTEN)]
-        listen: String,
-
-        #[arg(long, env = "REQLENS_UPSTREAM", default_value = DEFAULT_UPSTREAM)]
-        upstream: String,
+        /// Sobrescribe la base SQLite configurada durante `reqlens install`
+        #[arg(long, env = "REQLENS_DB_PATH")]
+        db_path: Option<PathBuf>,
     },
     /// Consulta el estado del servicio y métricas de la base de datos
     Status {
-        #[arg(long, env = "REQLENS_DB_PATH", default_value = DEFAULT_DB_PATH)]
-        db_path: PathBuf,
+        /// Sobrescribe la base SQLite configurada durante `reqlens install`
+        #[arg(long, env = "REQLENS_DB_PATH")]
+        db_path: Option<PathBuf>,
     },
     /// Reinicia el servicio de ReqLens
     Restart,

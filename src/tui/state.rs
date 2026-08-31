@@ -1,3 +1,4 @@
+use super::detail::format_request_detail;
 use super::model::{DashboardStats, FilterTab, RequestDetail, RequestSummary, SortField};
 use super::repo::{fetch_request_detail, fetch_requests, fetch_stats, open_readonly_conn};
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ pub struct TuiState {
     pub stats: DashboardStats,
     pub should_quit: bool,
     pub detail_scroll: u16,
+    pub detail_notice: Option<String>,
 }
 
 impl TuiState {
@@ -30,6 +32,7 @@ impl TuiState {
             stats: DashboardStats::default(),
             should_quit: false,
             detail_scroll: 0,
+            detail_notice: None,
         };
         state.reload_data();
         state
@@ -104,6 +107,7 @@ impl TuiState {
         if self.selected_detail.is_some() {
             self.selected_detail = None;
             self.detail_scroll = 0;
+            self.detail_notice = None;
             return;
         }
 
@@ -113,6 +117,7 @@ impl TuiState {
         {
             self.selected_detail = Some(detail);
             self.detail_scroll = 0;
+            self.detail_notice = None;
         }
     }
 
@@ -124,5 +129,21 @@ impl TuiState {
 
     pub fn scroll_detail_down(&mut self) {
         self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_detail_page_up(&mut self, page_size: u16) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(page_size);
+    }
+
+    pub fn scroll_detail_page_down(&mut self, page_size: u16) {
+        self.detail_scroll = self.detail_scroll.saturating_add(page_size);
+    }
+
+    pub fn detail_text(&self) -> Option<String> {
+        self.selected_detail.as_ref().map(format_request_detail)
+    }
+
+    pub fn set_detail_notice(&mut self, notice: String) {
+        self.detail_notice = Some(notice);
     }
 }

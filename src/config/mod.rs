@@ -1,6 +1,7 @@
 pub mod cli;
+pub mod installed;
 
-use self::cli::{AppConfig, CliArgs, Commands};
+use self::cli::{AppConfig, CliArgs, Commands, DEFAULT_DB_PATH, DEFAULT_LISTEN, DEFAULT_UPSTREAM};
 use crate::error::{ReqLensError, Result};
 use clap::Parser;
 use std::fs;
@@ -114,11 +115,14 @@ pub fn load_config() -> Result<AppConfig> {
             no_redact,
             tui,
         }) => resolve_config(&listen, &upstream, db_path, max_body, no_redact, tui),
-        Some(Commands::Tui {
-            db_path,
-            listen,
-            upstream,
-        }) => resolve_config(&listen, &upstream, db_path, DEFAULT_MAX_BODY, false, true),
+        Some(Commands::Tui { db_path }) => resolve_config(
+            DEFAULT_LISTEN,
+            DEFAULT_UPSTREAM,
+            db_path.unwrap_or_else(|| PathBuf::from(DEFAULT_DB_PATH)),
+            DEFAULT_MAX_BODY,
+            false,
+            true,
+        ),
         _ => resolve_config(
             &args.listen,
             &args.upstream,

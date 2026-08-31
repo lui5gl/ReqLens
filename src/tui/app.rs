@@ -1,3 +1,4 @@
+use base64::Engine;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -18,6 +19,9 @@ use crate::error::Result;
 
 const DEFAULT_TERMINAL_COLUMNS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
+const DETAIL_PAGE_SCROLL: u16 = 12;
+const OSC52_PREFIX: &str = "\x1b]52;c;";
+const OSC52_SUFFIX: &str = "\x07";
 
 #[derive(Debug, Clone)]
 pub enum TuiSource {
@@ -107,7 +111,7 @@ fn run_loop(
             {
                 handle_key_event(state, key);
             }
-        } else {
+        } else if state.selected_detail.is_none() {
             state.reload_data();
         }
     }
@@ -128,6 +132,9 @@ fn handle_key_event(state: &mut TuiState, key: KeyEvent) {
             KeyCode::Esc | KeyCode::Enter => state.toggle_detail(),
             KeyCode::Up | KeyCode::Char('k') => state.scroll_detail_up(),
             KeyCode::Down | KeyCode::Char('j') => state.scroll_detail_down(),
+            KeyCode::PageUp => state.scroll_detail_page_up(DETAIL_PAGE_SCROLL),
+            KeyCode::PageDown => state.scroll_detail_page_down(DETAIL_PAGE_SCROLL),
+            KeyCode::Char('c') => copy_detail_to_clipboard(state),
             _ => {}
         }
         return;
@@ -166,4 +173,24 @@ fn handle_key_event(state: &mut TuiState, key: KeyEvent) {
         KeyCode::Char('r') => state.reload_data(),
         _ => {}
     }
+}
+
+fn copy_detail_to_clipboard(state: &mut TuiState) {
+    let Some(detail_text) = state.detail_text() else {
+        return;
+    };
+    let encoded_detail = base64::engine::general_purpose::STANDARD.encode(detail_text);
+
+    match write_terminal_clipboard(&encoded_detail) {
+        Ok(()) => state.set_detail_notice("Copia enviada al portapapeles del terminal".into()),
+        Err(error) => state.set_detail_notice(format!("No se pudo copiar: {error}")),
+    }
+}
+
+fn write_terminal_clipboard(encoded_detail: &str) -> io::Result<()> {
+    use std::io::Write;
+
+    let mut stdout = io::stdout();
+    write!(stdout, "{OSC52_PREFIX}{encoded_detail}{OSC52_SUFFIX}")?;
+    stdout.flush()
 }

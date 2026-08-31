@@ -1,4 +1,5 @@
 use crate::config::cli::CaptureMode;
+use crate::config::installed::{InstalledConfig, save_installed_config};
 use crate::config::{parse_upstream, validate_proxy_endpoints};
 use crate::error::Result;
 use std::fs;
@@ -50,6 +51,18 @@ pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
         let (upstream_addr, _) = parse_upstream(config.upstream)?;
         validate_proxy_endpoints(listen_addr, &upstream_addr)?;
     }
+
+    save_installed_config(&InstalledConfig {
+        mode: config.mode,
+        interface: config.interface.into(),
+        server_ip: config.server_ip,
+        port: config.port,
+        listen: config.listen.into(),
+        upstream: config.upstream.into(),
+        db_path: config.db_path.into(),
+        max_body: config.max_body,
+        no_redact: config.no_redact,
+    })?;
 
     let current_exe = std::env::current_exe()?;
     let target_bin = Path::new("/usr/local/bin/reqlens");
@@ -274,6 +287,8 @@ pub fn uninstall_service(purge: bool) -> Result<()> {
 
     let _ = fs::remove_file("/usr/local/bin/reqlens");
     let _ = fs::remove_file("/usr/bin/reqlens");
+    let _ = fs::remove_file("/etc/reqlens/config.json");
+    let _ = fs::remove_dir("/etc/reqlens");
 
     println!("✅ Servicio, binarios y configuraciones removidas.");
 

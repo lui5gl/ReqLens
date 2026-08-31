@@ -6,7 +6,13 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::model::RequestDetail;
 
-pub fn render_detail_modal(frame: &mut Frame, area: Rect, detail: &RequestDetail, scroll: u16) {
+pub fn render_detail_modal(
+    frame: &mut Frame,
+    area: Rect,
+    detail: &RequestDetail,
+    scroll: u16,
+    notice: Option<&str>,
+) {
     let popup_area = centered_rect(85, 80, area);
     frame.render_widget(Clear, popup_area);
 
@@ -72,9 +78,13 @@ pub fn render_detail_modal(frame: &mut Frame, area: Rect, detail: &RequestDetail
         Line::from(detail.resp_body.as_deref().unwrap_or("(vacío)")),
     ];
 
+    let title = match notice {
+        Some(message) => format!(" {message} "),
+        None => " Detalle: [c] copiar, [PgUp/PgDn] pagina, [Esc/Enter] cerrar ".into(),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Detalle de Petición HTTP (Presiona [Esc]/[Enter] para cerrar, [↑/↓] scroll) ")
+        .title(title)
         .border_style(Style::default().fg(Color::Yellow));
 
     let paragraph = Paragraph::new(content)

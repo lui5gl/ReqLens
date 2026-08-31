@@ -1,4 +1,5 @@
 pub mod app;
+pub mod detail;
 pub mod model;
 pub mod repo;
 pub mod state;
