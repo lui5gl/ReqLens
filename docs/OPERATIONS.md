@@ -64,19 +64,14 @@ cargo install --path . --locked --root /usr/local
 ### Modos de Ejecución
 
 > [!IMPORTANT]
-> En modo `sniff`, Apache continúa siendo el único listener de `:80`; ReqLens
-> abre un socket `AF_PACKET` y recibe copias. No agregues NAT ni muevas Apache.
-> En el modo `proxy` histórico sí deben usarse puertos diferentes; la combinación
-> `--listen 0.0.0.0:80 --upstream http://127.0.0.1:80` se rechaza como bucle.
+> ReqLens es un proxy reverso: **ReqLens y Apache no pueden escuchar el mismo
+> puerto**. La combinación `--listen 0.0.0.0:80 --upstream
+> http://127.0.0.1:80` crea un bucle hacia el propio ReqLens y ahora se rechaza
+> al arrancar. Para capturar todas las peticiones PHP que llegan al puerto 80,
+> mueve Apache a un puerto interno diferente (por ejemplo `127.0.0.1:8080`) y
+> deja el puerto público 80 a ReqLens.
 
-1. **Modo pasivo recomendado:**
-   ```bash
-   sudo reqlens sniff --interface any --server-ip 172.23.25.36 --port 80
-   ```
-   Apache conserva `:80`; ReqLens requiere root o `CAP_NET_RAW`, pero no recibe,
-   redirige ni reenvía conexiones. Solo IPv4 HTTP/1.x plaintext es inspeccionable.
-
-2. **Modo proxy histórico:**
+1. **Modo Headless (Por Defecto - Servidor / Daemon):**
    ```bash
    reqlens --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
    ```
@@ -88,14 +83,13 @@ cargo install --path . --locked --root /usr/local
    ```
    Lanza el proxy en background y una interfaz visual completa en el terminal con actualización automática, filtros por pestañas (`Todos`, `Errores`, `Lentos`), navegación por filas e inspección modal de cabeceras y payloads.
 
-4. **Captura pasiva y arranque automático:**
+3. **Captura de todo el tráfico HTTP público y arranque automático:**
    ```bash
-   # Apache permanece sin cambios en :80.
+   # Primero configura Apache para escuchar solamente en 127.0.0.1:8080.
+   # Después instala, habilita e inicia ReqLens como servicio del sistema:
    sudo reqlens install \
-     --mode sniff \
-     --interface any \
-     --server-ip 172.23.25.36 \
-     --port 80 \
+     --listen 0.0.0.0:80 \
+     --upstream http://127.0.0.1:8080 \
      --db-path /var/lib/reqlens/reqlens.db
    ```
    `reqlens install` registra el servicio en systemd o SysV, lo inicia en ese
@@ -247,9 +241,7 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 | Síntoma Observado | Causa Raíz Probable | Solución Operativa |
 | :--- | :--- | :--- |
 | `Address already in use` al arrancar | El puerto (`--listen`) está ocupado por otro proceso o instancia previa. | Identificar el proceso en conflicto con `lsof -i :8080` y liberar el puerto o modificar el flag `--listen`. |
-| `proxy loop detected` o CPU elevada con listener `:80` | Se inició el modo proxy antiguo en vez del modo pasivo. | Detenerlo y usar `reqlens sniff --interface any --server-ip IP_DEL_SERVIDOR --port 80`. Apache permanece en `:80`. |
-| `passive capture needs root or CAP_NET_RAW` | El kernel rechazó la apertura de AF_PACKET. | Ejecutar como root o aplicar `setcap cap_net_raw=eip /usr/local/bin/reqlens`. |
-| No se capturan peticiones HTTPS | TLS cifra el protocolo HTTP antes de que AF_PACKET entregue la copia. | El modo pasivo inspecciona solamente HTTP plaintext; use instrumentación tras la terminación TLS si necesita bodies HTTPS. |
+| `proxy loop detected` o CPU elevada con listener `:80` | ReqLens se configuró para reenviar al mismo puerto local que él mismo ocupa. | Mover Apache a `127.0.0.1:8080` y configurar ReqLens con `--listen 0.0.0.0:80 --upstream http://127.0.0.1:8080`. |
 | La TUI no sale con `q` | Había un modal abierto o el terminal reportó eventos repetidos en vez de pulsaciones simples. | La TUI actual acepta pulsaciones/repeticiones; usa `q` desde cualquier vista o `Ctrl+C` como salida universal. |
 | `database is locked` al ejecutar SQL | Una sesión externa mantiene una transacción `BEGIN EXCLUSIVE` sin cerrar. | Identificar y terminar la sesión analítica interactiva colgada. |
 | El archivo `-wal` no disminuye de tamaño | Checkpoints bloqueados por lectores concurrentes de larga duración. | Ejecutar `PRAGMA wal_checkpoint(TRUNCATE);` una vez concluidas las consultas pesadas. |
