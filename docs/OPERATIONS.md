@@ -6,7 +6,7 @@
 | Propiedad | Especificación |
 | :--- | :--- |
 | **Sistema Operativo Objetivo** | Linux (Kernel $\ge$ 5.10 / systemd) |
-| **Permisos de Ejecución** | Usuario dedicado sin privilegios (`reqlens`), sin acceso root |
+| **Permisos de Ejecución** | `root` o `CAP_NET_RAW` para abrir AF_PACKET; SQLite debe permanecer restringido |
 | **Modo de Base de Datos** | SQLite 3 (WAL mode) en `/var/lib/reqlens` (permisos `0700`) |
 | **Audiencia** | Ingenieros de Sistemas, DevOps y SRE |
 
@@ -49,8 +49,11 @@ cargo install --path . --locked --root /usr/local
 
 | Parámetro CLI | Variable de Entorno | Valor por Defecto | Descripción Operativa |
 | :--- | :--- | :--- | :--- |
-| `--listen` | `REQLENS_LISTEN` | `0.0.0.0:8080` | Dirección IP y puerto TCP del listener del proxy |
-| `--upstream` | `REQLENS_UPSTREAM` | `http://127.0.0.1:80` | Dirección HTTP del servidor Apache destino |
+| `sniff --interface` | `REQLENS_INTERFACE` | `any` | Interfaz Linux observada sin modificar tráfico |
+| `sniff --server-ip` | `REQLENS_SERVER_IP` | cualquier IP | IP local de Apache para evitar tráfico ajeno |
+| `sniff --port` | `REQLENS_PORT` | `80` | Puerto HTTP plaintext observado |
+| `--listen` | `REQLENS_LISTEN` | `0.0.0.0:8080` | Listener usado solamente por el modo proxy histórico |
+| `--upstream` | `REQLENS_UPSTREAM` | `http://127.0.0.1:80` | Apache destino usado solamente por el modo proxy |
 | `--db-path` | `REQLENS_DB_PATH` | `./data/reqlens.db` | Ruta absoluta o relativa al archivo SQLite |
 | `--max-body` | `REQLENS_MAX_BODY` | `65536` (64 KB) | Límite máximo en bytes de captura por payload |
 | `--no-redact` | `REQLENS_NO_REDACT` | `false` | Desactiva redacción automática (**no recomendado**) |
@@ -74,7 +77,7 @@ cargo install --path . --locked --root /usr/local
    ```
    Ideal para entornos desatendidos, servicios systemd o contenedores. Las trazas de observabilidad se emiten en formato estructurado `tracing`.
 
-2. **Modo Dashboard Interactivo (TUI):**
+3. **Modo Dashboard Interactivo (TUI):**
    ```bash
    reqlens --tui --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
    ```
@@ -104,18 +107,18 @@ Crea el archivo de servicio en `/etc/systemd/system/reqlens.service`:
 
 ```ini
 [Unit]
-Description=ReqLens — Reverse Proxy de Observabilidad HTTP
+Description=ReqLens — Observabilidad HTTP Pasiva
 Documentation=https://github.com/tu-org/reqlens
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=reqlens
-Group=reqlens
-ExecStart=/usr/local/bin/reqlens \
-    --listen 0.0.0.0:8080 \
-    --upstream http://127.0.0.1:80 \
+User=root
+ExecStart=/usr/local/bin/reqlens sniff \
+    --interface any \
+    --server-ip 172.23.25.36 \
+    --port 80 \
     --db-path /var/lib/reqlens/reqlens.db \
     --max-body 65536
 Restart=on-failure
@@ -254,5 +257,3 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 - **Endpoints de Diagnóstico (Roadmap):**
   - `/healthz`: Estado operativo del pipeline (salud del worker de SQLite y estado de la cola).
   - `/metrics`: Métricas de peticiones totales, latencia p50/p95, eventos descartados y errores de disco en formato compatible con Prometheus.
-
-
