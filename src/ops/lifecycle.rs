@@ -80,6 +80,17 @@ pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
         validate_proxy_endpoints(listen_addr, &upstream_addr)?;
     }
 
+    if config.mode == CaptureMode::Proxy {
+        let listen_addr = config.listen.parse().map_err(|error| {
+            crate::error::ReqLensError::Config(format!(
+                "Invalid listen address '{}': {error}",
+                config.listen
+            ))
+        })?;
+        let (upstream_addr, _) = parse_upstream(config.upstream)?;
+        validate_proxy_endpoints(listen_addr, &upstream_addr)?;
+    }
+
     let current_exe = std::env::current_exe()?;
     let target_bin = Path::new("/usr/local/bin/reqlens");
 
@@ -96,7 +107,7 @@ pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
         let _ = fs::set_permissions(target_bin, perms);
     }
 
-    if let Some(parent) = db_path.parent()
+    if let Some(parent) = config.db_path.parent()
         && !parent.exists()
     {
         let _ = fs::create_dir_all(parent);
@@ -113,27 +124,28 @@ pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
         .args(["-r", "-s", "/usr/sbin/nologin", "reqlens"])
         .status();
 
-    let redact_flag = if no_redact { " --no-redact" } else { "" };
-    let server_ip_flag = server_ip
+    let redact_flag = if config.no_redact { " --no-redact" } else { "" };
+    let server_ip_flag = config
+        .server_ip
         .map(|ip| format!(" --server-ip {ip}"))
         .unwrap_or_default();
-    let exec_args = match mode {
+    let exec_args = match config.mode {
         CaptureMode::Sniff => format!(
             "sniff --interface {} --port {}{} --db-path {}{} --max-body {}",
-            interface,
-            port,
+            config.interface,
+            config.port,
             server_ip_flag,
-            db_path.display(),
+            config.db_path.display(),
             redact_flag,
-            max_body
+            config.max_body
         ),
         CaptureMode::Proxy => format!(
             "--listen {} --upstream {} --db-path {}{} --max-body {}",
-            listen,
-            upstream,
-            db_path.display(),
+            config.listen,
+            config.upstream,
+            config.db_path.display(),
             redact_flag,
-            max_body
+            config.max_body
         ),
     };
     let service_content = format!(
