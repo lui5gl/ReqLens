@@ -1,7 +1,22 @@
+use crate::config::cli::CaptureMode;
+use crate::config::{parse_upstream, validate_proxy_endpoints};
 use crate::error::Result;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::process::Command;
+
+pub struct InstallConfig<'a> {
+    pub mode: CaptureMode,
+    pub interface: &'a str,
+    pub server_ip: Option<Ipv4Addr>,
+    pub port: u16,
+    pub listen: &'a str,
+    pub upstream: &'a str,
+    pub db_path: &'a Path,
+    pub max_body: usize,
+    pub no_redact: bool,
+}
 
 pub fn auto_deploy_to_bin() {
     let Ok(current_exe) = std::env::current_exe() else {
@@ -23,14 +38,30 @@ pub fn auto_deploy_to_bin() {
     }
 }
 
-pub fn install_service(
-    listen: &str,
-    upstream: &str,
-    db_path: &Path,
-    max_body: usize,
-    no_redact: bool,
-) -> Result<()> {
+pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
     println!("📦 Instalando ReqLens en el sistema...");
+
+    let InstallConfig {
+        mode,
+        interface,
+        server_ip,
+        port,
+        listen,
+        upstream,
+        db_path,
+        max_body,
+        no_redact,
+    } = config;
+
+    if mode == CaptureMode::Proxy {
+        let listen_addr = listen.parse().map_err(|error| {
+            crate::error::ReqLensError::Config(format!(
+                "Invalid listen address '{listen}': {error}"
+            ))
+        })?;
+        let (upstream_addr, _) = parse_upstream(upstream)?;
+        validate_proxy_endpoints(listen_addr, &upstream_addr)?;
+    }
 
     let current_exe = std::env::current_exe()?;
     let target_bin = Path::new("/usr/local/bin/reqlens");
@@ -66,16 +97,38 @@ pub fn install_service(
         .status();
 
     let redact_flag = if no_redact { " --no-redact" } else { "" };
+    let server_ip_flag = server_ip
+        .map(|ip| format!(" --server-ip {ip}"))
+        .unwrap_or_default();
+    let exec_args = match mode {
+        CaptureMode::Sniff => format!(
+            "sniff --interface {} --port {}{} --db-path {}{} --max-body {}",
+            interface,
+            port,
+            server_ip_flag,
+            db_path.display(),
+            redact_flag,
+            max_body
+        ),
+        CaptureMode::Proxy => format!(
+            "--listen {} --upstream {} --db-path {}{} --max-body {}",
+            listen,
+            upstream,
+            db_path.display(),
+            redact_flag,
+            max_body
+        ),
+    };
     let service_content = format!(
         r#"[Unit]
-Description=ReqLens — HTTP Observability Reverse Proxy
+Description=ReqLens — HTTP Observability
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/reqlens --listen {} --upstream {} --db-path {}{} --max-body {}
+ExecStart=/usr/local/bin/reqlens {}
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65535
@@ -83,11 +136,7 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 "#,
-        listen,
-        upstream,
-        db_path.display(),
-        redact_flag,
-        max_body
+        exec_args
     );
 
     let service_path = Path::new("/etc/systemd/system/reqlens.service");
@@ -107,11 +156,11 @@ WantedBy=multi-user.target
         let init_script_content = format!(
             r#"#!/bin/bash
 # chkconfig: 2345 90 10
-# description: ReqLens HTTP Observability Reverse Proxy
+# description: ReqLens HTTP Observability
 
 PIDFILE=/var/run/reqlens.pid
 BIN=/usr/local/bin/reqlens
-ARGS="--listen {} --upstream {} --db-path {}{} --max-body {}"
+ARGS="{}"
 
 case "$1" in
     start)
@@ -149,11 +198,7 @@ case "$1" in
 esac
 exit 0
 "#,
-            listen,
-            upstream,
-            db_path.display(),
-            redact_flag,
-            max_body
+            exec_args
         );
 
         let init_path = Path::new("/etc/init.d/reqlens");

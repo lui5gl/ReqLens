@@ -19,25 +19,25 @@ Habilitar herramientas como `mod_dumpio` requiere reconfigurar Apache, arriesga 
 
 ## 💡 ¿Cómo Funciona ReqLens?
 
-ReqLens actúa como un **proxy reverso transparente** interpuesto entre los clientes y el servidor Apache, capturando el tráfico en vuelo sin perturbar el entorno existente.
+ReqLens observa de forma **pasiva** una copia del tráfico HTTP/1.x plaintext
+mediante `AF_PACKET` en Linux. No abre el puerto observado, no reenvía las
+conexiones y no modifica el camino entre los clientes y Apache.
 
 ```
-┌──────────┐        ┌──────────────────┐        ┌──────────────┐        ┌─────────────┐
-│ Cliente  │───────▶│ ReqLens (:8080)  │───────▶│ Apache (:80) │───────▶│ App Backend │
-└──────────┘        └────────┬─────────┘        └──────────────┘        └─────────────┘
-                             │
-                  [Ingestión Asíncrona]
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ SQLite (Modo WAL)│
-                    └─────────────────┘
+┌──────────┐                   ┌──────────────┐        ┌─────────────┐
+│ Cliente  │──────────────────▶│ Apache (:80) │───────▶│ PHP / App   │
+└──────────┘       HTTP        └──────┬───────┘        └─────────────┘
+                                     │ copia de paquetes (sin modificar tráfico)
+                                     ▼
+                            ┌──────────────────┐
+                            │ ReqLens sniff    │──────▶ SQLite (WAL)
+                            └──────────────────┘
 ```
 
 ### Principios Fundamentales de Operación
 
-1. **No Invasivo (Zero-Config Apache):** No requiere instalar módulos en Apache, alterar archivos `httpd.conf` ni reiniciar servicios.
-2. **Fail-Open (Aislamiento Total del Tráfico):** Si la base de datos se bloquea, el disco se satura o la persistencia falla, **el tráfico HTTP jamás se interrumpe**.
+1. **No Invasivo (Zero-Config Apache):** No requiere instalar módulos, alterar `httpd.conf`, cambiar el puerto 80, reiniciar Apache ni agregar reglas NAT.
+2. **Fail-Open Real:** ReqLens recibe una copia de los paquetes; detenerlo o matarlo no interrumpe Apache ni PHP.
 3. **Persistencia Desacoplada (Asíncrona):** Las peticiones y respuestas se capturan en memoria mediante un canal acotado; la latencia de escritura a disco nunca penaliza el tiempo de respuesta del cliente.
 4. **Seguridad y Privacidad por Defecto (*Fail-Safe*):** Redacción automática de credenciales y datos sensibles (`password`, `token`, `secret`, `api_key`) y exclusión inmutable de cookies y cabeceras de autorización.
 
@@ -53,6 +53,31 @@ ReqLens actúa como un **proxy reverso transparente** interpuesto entre los clie
 - **Consultas Analíticas Inmediatas:** Utiliza SQL estándar sobre SQLite para filtrar, agrupar y diagnosticar sin necesidad de montar clústeres externos de telemetría (Elasticsearch, OpenTelemetry, etc.).
 - **Gestión Nativa de Ciclo de Vida:** Comandos directos integrados en la CLI (`reqlens status`, `reqlens restart`, `reqlens disable`, `reqlens uninstall`).
 
+### Inicio rápido: captura pasiva
+
+```bash
+# Observa HTTP plaintext en el puerto 80 sin ocuparlo. Requiere root o CAP_NET_RAW.
+sudo reqlens sniff \
+  --interface any \
+  --server-ip 172.23.25.36 \
+  --port 80 \
+  --db-path /var/lib/reqlens/reqlens.db \
+  --tui
+
+# Instala el mismo modo como servicio de arranque automático (modo por defecto).
+sudo reqlens install \
+  --mode sniff \
+  --interface any \
+  --server-ip 172.23.25.36 \
+  --port 80
+```
+
+Apache debe continuar siendo el único proceso escuchando en `:80`. El modo
+pasivo soporta IPv4 y HTTP/1.0–HTTP/1.1 sin TLS. HTTPS cifra los headers y bodies
+y no puede inspeccionarse pasivamente. El proxy histórico se conserva de forma
+explícita con `reqlens start` (alias conceptual `proxy`) para instalaciones que
+sí acepten colocarlo en el camino crítico.
+
 
 
 ---
@@ -63,8 +88,8 @@ ReqLens implementa una semántica **at-most-once** diseñada específicamente pa
 
 | Escenario | Comportamiento del Sistema |
 | :--- | :--- |
-| **Pico de tráfico saturado (>1k req/s)** | Los eventos excedentes en cola se descartan ordenadamente; el proxy sigue atendiendo tráfico a velocidad de cable. |
-| **Caída o desconexión de disco** | El lote de inserción se revierte y se reporta en logs; las peticiones HTTP siguen fluyendo. |
+| **Pico de tráfico saturado (>1k req/s)** | Los eventos excedentes en cola se descartan; Apache no depende del observador. |
+| **Caída o desconexión de disco** | El lote se revierte y se reporta; las peticiones HTTP siguen llegando directamente a Apache. |
 | **Cierre controlado (SIGTERM/SIGINT)** | Drenado automático de peticiones en vuelo y flush de eventos pendientes a disco. |
 
 ---
@@ -92,4 +117,3 @@ La documentación técnica está estructurada por responsabilidades específicas
 ## 📄 Licencia
 
 [MIT](LICENSE) © 2026.
-

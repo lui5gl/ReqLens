@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -7,18 +7,38 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io::{self, Stdout};
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use super::model::FilterTab;
 use super::state::TuiState;
 use super::views::render_ui;
-use crate::config::cli::AppConfig;
 use crate::error::Result;
 
 const DEFAULT_TERMINAL_COLUMNS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
-pub fn run_tui_app(config: &AppConfig) -> Result<()> {
+#[derive(Debug, Clone)]
+pub enum TuiSource {
+    Passive {
+        interface: String,
+        server_ip: Option<Ipv4Addr>,
+        port: u16,
+    },
+    Proxy {
+        listen: String,
+        upstream: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct TuiConfig {
+    pub db_path: PathBuf,
+    pub source: TuiSource,
+}
+
+pub fn run_tui_app(config: &TuiConfig) -> Result<()> {
     enable_raw_mode().map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -74,18 +94,18 @@ fn create_terminal(
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     state: &mut TuiState,
-    config: &AppConfig,
+    config: &TuiConfig,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(500);
 
     while !state.should_quit {
         terminal.draw(|frame| render_ui(frame, state, config))?;
 
-        if event::poll(tick_rate).unwrap_or(false) {
-            if let Ok(Event::Key(key)) = event::read()
-                && key.kind == KeyEventKind::Press
+        if event::poll(tick_rate)? {
+            if let Event::Key(key) = event::read()?
+                && key.kind != KeyEventKind::Release
             {
-                handle_key_event(state, key.code);
+                handle_key_event(state, key);
             }
         } else {
             state.reload_data();
@@ -95,10 +115,17 @@ fn run_loop(
     Ok(())
 }
 
-fn handle_key_event(state: &mut TuiState, code: KeyCode) {
+fn handle_key_event(state: &mut TuiState, key: KeyEvent) {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.should_quit = true;
+        return;
+    }
+
+    let code = key.code;
     if state.selected_detail.is_some() {
         match code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.toggle_detail(),
+            KeyCode::Char('q') => state.should_quit = true,
+            KeyCode::Esc | KeyCode::Enter => state.toggle_detail(),
             KeyCode::Up | KeyCode::Char('k') => state.scroll_detail_up(),
             KeyCode::Down | KeyCode::Char('j') => state.scroll_detail_down(),
             _ => {}
@@ -121,11 +148,7 @@ fn handle_key_event(state: &mut TuiState, code: KeyCode) {
         KeyCode::Char('q') => state.should_quit = true,
         KeyCode::Char('/') => state.is_searching = true,
         KeyCode::Char('s') | KeyCode::Char('o') => state.cycle_sort(),
-        KeyCode::Esc => {
-            if !state.search_query.is_empty() {
-                state.clear_search();
-            }
-        }
+        KeyCode::Esc if !state.search_query.is_empty() => state.clear_search(),
         KeyCode::Down | KeyCode::Char('j') => state.next_row(),
         KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
         KeyCode::Enter | KeyCode::Char(' ') => state.toggle_detail(),

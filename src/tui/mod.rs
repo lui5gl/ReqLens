@@ -4,4 +4,4 @@ pub mod repo;
 pub mod state;
 pub mod views;
 
-pub use app::run_tui_app;
+pub use app::{TuiConfig, TuiSource, run_tui_app};

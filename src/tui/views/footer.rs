@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 pub fn render_footer(frame: &mut Frame, area: Rect) {
     let footer_text = Line::from(vec![
         Span::styled(
-            "[q] ",
+            "[q/Ctrl+C] ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
