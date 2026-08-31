@@ -35,7 +35,7 @@ pub fn run_sniffer(
     ingest: IngestSender,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
-    let capture = socket::PacketSocket::open(&config.interface, config.port).map_err(|error| {
+    let capture = socket::PacketSocket::open(&config.interface).map_err(|error| {
         if error.kind() == std::io::ErrorKind::PermissionDenied {
             ReqLensError::Config(
                 "passive capture needs root or CAP_NET_RAW; run as root or apply: setcap cap_net_raw=eip /usr/local/bin/reqlens".into(),
