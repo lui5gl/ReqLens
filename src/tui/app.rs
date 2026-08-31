@@ -7,18 +7,38 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io::{self, Stdout};
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use super::model::FilterTab;
 use super::state::TuiState;
 use super::views::render_ui;
-use crate::config::cli::AppConfig;
 use crate::error::Result;
 
 const DEFAULT_TERMINAL_COLUMNS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
-pub fn run_tui_app(config: &AppConfig) -> Result<()> {
+#[derive(Debug, Clone)]
+pub enum TuiSource {
+    Passive {
+        interface: String,
+        server_ip: Option<Ipv4Addr>,
+        port: u16,
+    },
+    Proxy {
+        listen: String,
+        upstream: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct TuiConfig {
+    pub db_path: PathBuf,
+    pub source: TuiSource,
+}
+
+pub fn run_tui_app(config: &TuiConfig) -> Result<()> {
     enable_raw_mode().map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -74,7 +94,7 @@ fn create_terminal(
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     state: &mut TuiState,
-    config: &AppConfig,
+    config: &TuiConfig,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(500);
 

@@ -4,10 +4,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::config::cli::AppConfig;
+use crate::tui::app::{TuiConfig, TuiSource};
 use crate::tui::state::TuiState;
 
-pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &AppConfig) {
+pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &TuiConfig) {
     let title = Line::from(vec![
         Span::styled(
             " ReqLens ",
@@ -16,17 +16,41 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &A
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" | HTTP Observability | "),
-        Span::styled(
-            format!("Listen: {} ", config.listen_addr),
-            Style::default().fg(Color::Yellow),
-        ),
-        Span::raw("-> "),
-        Span::styled(
-            format!("Upstream: {} ", config.upstream_addr),
-            Style::default().fg(Color::Green),
-        ),
+        Span::raw(match &config.source {
+            TuiSource::Passive { .. } => " | Passive HTTP Observability",
+            TuiSource::Proxy { .. } => " | HTTP Proxy Observability",
+        }),
     ]);
+    let source_line = match &config.source {
+        TuiSource::Passive {
+            interface,
+            server_ip,
+            port,
+        } => Line::from(vec![
+            Span::styled(
+                format!("Interface: {interface} | "),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                format!(
+                    "Server: {} | Port: {port}",
+                    server_ip.map_or_else(|| "any".to_string(), |ip| ip.to_string())
+                ),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
+        TuiSource::Proxy { listen, upstream } => Line::from(vec![
+            Span::styled(
+                format!("Listen: {listen} "),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw("-> "),
+            Span::styled(
+                format!("Upstream: {upstream} "),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
+    };
 
     let error_color = if state.stats.error_count > 0 {
         Color::Red
@@ -60,6 +84,6 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &A
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let header_widget = Paragraph::new(vec![title, stats_line]).block(block);
+    let header_widget = Paragraph::new(vec![title, source_line, stats_line]).block(block);
     frame.render_widget(header_widget, area);
 }

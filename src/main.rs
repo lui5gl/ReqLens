@@ -10,7 +10,7 @@ use reqlens::ingest;
 use reqlens::ops;
 use reqlens::proxy;
 use reqlens::sniff::{self, SniffConfig};
-use reqlens::tui;
+use reqlens::tui::{self, TuiConfig, TuiSource};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     ops::auto_deploy_to_bin();
@@ -25,11 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             db_path,
             max_body,
             no_redact,
+            tui: tui_enabled,
         }) => {
-            tracing_subscriber::registry()
-                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-                .with(tracing_subscriber::fmt::layer())
-                .init();
+            if !tui_enabled {
+                tracing_subscriber::registry()
+                    .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+                    .with(tracing_subscriber::fmt::layer())
+                    .init();
+            }
 
             if max_body == 0 {
                 return Err("--max-body must be greater than zero".into());
@@ -40,17 +43,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(db_path);
+            let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(db_path.clone());
             let running = Arc::new(AtomicBool::new(true));
             register_shutdown_signals(&running)?;
             let config = SniffConfig {
-                interface,
+                interface: interface.clone(),
                 server_ip,
                 port,
                 max_body,
                 redact_enabled: !no_redact,
             };
-            sniff::run_sniffer(config, ingest_sender.clone(), running)?;
+            if tui_enabled {
+                let sniff_ingest = ingest_sender.clone();
+                let sniff_running = Arc::clone(&running);
+                let sniff_handle =
+                    thread::spawn(move || sniff::run_sniffer(config, sniff_ingest, sniff_running));
+
+                // Surface immediate startup failures (permissions/interface)
+                // before taking ownership of the terminal.
+                thread::sleep(std::time::Duration::from_millis(50));
+                if sniff_handle.is_finished() {
+                    let result = sniff_handle
+                        .join()
+                        .map_err(|_| "passive capture thread panicked")?;
+                    running.store(false, Ordering::Relaxed);
+                    drop(ingest_sender);
+                    let _ = ingest_handle.join();
+                    result?;
+                    return Err("passive capture stopped during startup".into());
+                }
+
+                let tui_config = TuiConfig {
+                    db_path,
+                    source: TuiSource::Passive {
+                        interface,
+                        server_ip,
+                        port,
+                    },
+                };
+                let tui_result = tui::run_tui_app(&tui_config);
+                running.store(false, Ordering::Relaxed);
+                let sniff_result = sniff_handle
+                    .join()
+                    .map_err(|_| "passive capture thread panicked")?;
+                tui_result?;
+                sniff_result?;
+            } else {
+                sniff::run_sniffer(config, ingest_sender.clone(), running)?;
+            }
             drop(ingest_sender);
             let _ = ingest_handle.join();
             return Ok(());
@@ -100,17 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             listen,
             upstream,
         }) => {
-            let (upstream_addr, upstream_host) = parse_upstream(&upstream)?;
-            let tui_cfg = reqlens::config::cli::AppConfig {
-                listen_addr: listen
-                    .parse()
-                    .unwrap_or_else(|_| "0.0.0.0:8080".parse().unwrap()),
-                upstream_addr,
-                upstream_host,
+            let (upstream_addr, _) = parse_upstream(&upstream)?;
+            let tui_cfg = TuiConfig {
                 db_path,
-                max_body: 65536,
-                redact_enabled: true,
-                tui_enabled: true,
+                source: TuiSource::Proxy {
+                    listen,
+                    upstream: upstream_addr,
+                },
             };
             tui::run_tui_app(&tui_cfg)?;
             return Ok(());
@@ -148,7 +184,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = proxy::run_server(proxy_cfg, proxy_ingest, proxy_running);
         });
 
-        let tui_cfg = (*config).clone();
+        let tui_cfg = TuiConfig {
+            db_path: config.db_path.clone(),
+            source: TuiSource::Proxy {
+                listen: config.listen_addr.to_string(),
+                upstream: config.upstream_addr.clone(),
+            },
+        };
         tui::run_tui_app(&tui_cfg)?;
 
         running.store(false, Ordering::Relaxed);

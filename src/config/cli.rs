@@ -19,7 +19,7 @@ pub enum CaptureMode {
 #[command(
     name = "reqlens",
     version,
-    about = "HTTP observability reverse proxy for Apache"
+    about = "Passive HTTP observability and optional reverse proxy for Apache"
 )]
 pub struct CliArgs {
     #[command(subcommand)]
@@ -68,6 +68,10 @@ pub enum Commands {
 
         #[arg(long, env = "REQLENS_NO_REDACT", default_value_t = false)]
         no_redact: bool,
+
+        /// Abre la TUI consumiendo la misma base SQLite del sniffer
+        #[arg(long, env = "REQLENS_TUI", default_value_t = false)]
+        tui: bool,
     },
 
     /// Inicia el proxy reverso de observabilidad

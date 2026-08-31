@@ -101,12 +101,34 @@ fn stmt(code: u16, jt: u8, jf: u8, k: u32) -> libc::sock_filter {
 fn attach_port_filter(fd: libc::c_int, port: u16) -> io::Result<()> {
     // AF_PACKET/SOCK_DGRAM strips the link header, so offsets start at IPv4.
     // Accept TCP packets whose source or destination port matches `port`.
-    let mut instructions = [
+    let mut instructions = port_filter(port);
+    let program = libc::sock_fprog {
+        len: instructions.len() as u16,
+        filter: instructions.as_mut_ptr(),
+    };
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ATTACH_FILTER,
+            (&program as *const libc::sock_fprog).cast(),
+            mem::size_of::<libc::sock_fprog>() as libc::socklen_t,
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn port_filter(port: u16) -> [libc::sock_filter; 9] {
+    [
         stmt((libc::BPF_LD | libc::BPF_B | libc::BPF_ABS) as u16, 0, 0, 9),
         stmt(
             (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
             0,
-            5,
+            // Jump directly to RET 0 when the IPv4 protocol is not TCP.
+            6,
             libc::IPPROTO_TCP as u32,
         ),
         stmt(
@@ -131,22 +153,24 @@ fn attach_port_filter(fd: libc::c_int, port: u16) -> io::Result<()> {
         ),
         stmt((libc::BPF_RET | libc::BPF_K) as u16, 0, 0, u32::MAX),
         stmt((libc::BPF_RET | libc::BPF_K) as u16, 0, 0, 0),
-    ];
-    let program = libc::sock_fprog {
-        len: instructions.len() as u16,
-        filter: instructions.as_mut_ptr(),
-    };
-    let result = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_ATTACH_FILTER,
-            (&program as *const libc::sock_fprog).cast(),
-            mem::size_of::<libc::sock_fprog>() as libc::socklen_t,
-        )
-    };
-    if result < 0 {
-        return Err(io::Error::last_os_error());
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::port_filter;
+
+    #[test]
+    fn non_tcp_branch_jumps_to_kernel_reject() {
+        let filter = port_filter(80);
+        let protocol_check_index = 1_usize;
+        let reject_index = protocol_check_index + 1 + usize::from(filter[1].jf);
+
+        assert_eq!(reject_index, 8);
+        assert_eq!(
+            filter[reject_index].code,
+            (libc::BPF_RET | libc::BPF_K) as u16
+        );
+        assert_eq!(filter[reject_index].k, 0);
     }
-    Ok(())
 }

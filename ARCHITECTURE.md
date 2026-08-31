@@ -38,6 +38,10 @@ Un filtro BPF en el kernel entrega solamente TCP con el puerto observado como
 origen o destino. ReqLens clasifica cada conexión por las direcciones y puertos
 de cliente y servidor, reconstruye ambas direcciones usando sequence numbers y
 correlaciona las respuestas con una cola de requests por conexión keep-alive.
+Un ACK vacío observado al iniciar a mitad de una conexión no establece el origen
+de secuencia; únicamente SYN o el primer payload observado pueden hacerlo. Las
+respuestas informativas 1xx (excepto el cambio de protocolo 101) tampoco consumen
+la request pendiente antes de la respuesta final.
 
 ### Límites de recursos
 

@@ -122,6 +122,14 @@ impl SniffEngine {
                     .is_some_and(|request| request.method == "HEAD"),
                 segment.fin,
             ) {
+                // Informational responses do not complete the request/response
+                // exchange. 101 is the explicit exception: it finalizes the
+                // HTTP request before the connection switches protocols.
+                if response_status(&message)
+                    .is_some_and(|status| (100..200).contains(&status) && status != 101)
+                {
+                    continue;
+                }
                 let Some(request) = flow.requests.pop_front() else {
                     continue;
                 };
@@ -196,7 +204,12 @@ impl Direction {
         let mut sequence = segment.sequence.wrapping_add(u32::from(segment.syn));
         let mut payload = segment.payload.as_slice();
         if payload.is_empty() {
-            self.next_sequence.get_or_insert(sequence);
+            // Only SYN provides a reliable sequence origin. An empty ACK may
+            // come from a connection established before capture started; using
+            // it would make later payload look permanently out of order.
+            if segment.syn {
+                self.next_sequence.get_or_insert(sequence);
+            }
             return;
         }
 
@@ -252,6 +265,14 @@ fn header_end(bytes: &[u8]) -> Option<usize> {
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .map(|p| p + 4)
+}
+
+fn response_status(message: &[u8]) -> Option<u16> {
+    let header_len = header_end(message)?;
+    let mut header_slots = [httparse::EMPTY_HEADER; 64];
+    let mut response = httparse::Response::new(&mut header_slots);
+    response.parse(&message[..header_len]).ok()?;
+    response.code
 }
 
 fn take_http_message(
@@ -461,5 +482,47 @@ mod tests {
         fin.fin = true;
         let events = engine.process(fin);
         assert_eq!(events[0].resp_body.as_deref(), Some("legacy body"));
+    }
+
+    #[test]
+    fn captures_existing_connection_after_empty_ack() {
+        let mut engine = SniffEngine::new(Some(Ipv4Addr::new(10, 0, 0, 1)), 80, 65_536, true);
+
+        // Capture starts after the browser has already established keep-alive.
+        assert!(engine.process(segment(true, 100, b"")).is_empty());
+        let request = b"GET /browser HTTP/1.1\r\nHost: test\r\nConnection: keep-alive\r\n\r\n";
+        assert!(engine.process(segment(true, 5_000, request)).is_empty());
+
+        // The reverse direction can also first appear as an unrelated ACK.
+        assert!(engine.process(segment(false, 200, b"")).is_empty());
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+        let events = engine.process(segment(false, 9_000, response));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path, "/browser");
+        assert_eq!(events[0].resp_status, 200);
+        assert_eq!(events[0].resp_body.as_deref(), Some("OK"));
+    }
+
+    #[test]
+    fn informational_response_does_not_consume_pending_request() {
+        let mut engine = SniffEngine::new(None, 80, 65_536, true);
+        let request = b"POST /guardar HTTP/1.1\r\nHost: test\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\ndata";
+        assert!(engine.process(segment(true, 100, request)).is_empty());
+
+        let informational = b"HTTP/1.1 100 Continue\r\n\r\n";
+        assert!(
+            engine
+                .process(segment(false, 500, informational))
+                .is_empty()
+        );
+
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+        let events = engine.process(segment(false, 500 + informational.len() as u32, response));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].method, "POST");
+        assert_eq!(events[0].path, "/guardar");
+        assert_eq!(events[0].resp_status, 200);
+        assert_eq!(events[0].resp_body.as_deref(), Some("OK"));
     }
 }

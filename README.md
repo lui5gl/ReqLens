@@ -61,7 +61,8 @@ sudo reqlens sniff \
   --interface any \
   --server-ip 172.23.25.36 \
   --port 80 \
-  --db-path /var/lib/reqlens/reqlens.db
+  --db-path /var/lib/reqlens/reqlens.db \
+  --tui
 
 # Instala el mismo modo como servicio de arranque automático (modo por defecto).
 sudo reqlens install \
