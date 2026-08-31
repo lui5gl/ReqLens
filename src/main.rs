@@ -9,6 +9,7 @@ use reqlens::config::{self, parse_cli, parse_upstream};
 use reqlens::ingest;
 use reqlens::ops;
 use reqlens::proxy;
+use reqlens::sniff::{self, SniffConfig};
 use reqlens::tui;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +18,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_cli();
 
     match args.command {
+        Some(Commands::Sniff {
+            interface,
+            server_ip,
+            port,
+            db_path,
+            max_body,
+            no_redact,
+        }) => {
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+
+            if max_body == 0 {
+                return Err("--max-body must be greater than zero".into());
+            }
+            if let Some(parent) = db_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(db_path);
+            let running = Arc::new(AtomicBool::new(true));
+            register_shutdown_signals(&running)?;
+            let config = SniffConfig {
+                interface,
+                server_ip,
+                port,
+                max_body,
+                redact_enabled: !no_redact,
+            };
+            sniff::run_sniffer(config, ingest_sender.clone(), running)?;
+            drop(ingest_sender);
+            let _ = ingest_handle.join();
+            return Ok(());
+        }
         Some(Commands::Status { db_path }) => {
             ops::print_status(&db_path)?;
             return Ok(());
@@ -30,13 +68,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         Some(Commands::Install {
+            mode,
+            interface,
+            server_ip,
+            port,
             listen,
             upstream,
             db_path,
             max_body,
             no_redact,
         }) => {
-            ops::install_service(&listen, &upstream, &db_path, max_body, no_redact)?;
+            ops::install_service(ops::InstallConfig {
+                mode,
+                interface: &interface,
+                server_ip,
+                port,
+                listen: &listen,
+                upstream: &upstream,
+                db_path: &db_path,
+                max_body,
+                no_redact,
+            })?;
             return Ok(());
         }
         Some(Commands::Uninstall { purge }) => {
@@ -85,9 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(config);
     let running = Arc::new(AtomicBool::new(true));
 
-    let r_clone = Arc::clone(&running);
-    let _ = signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&r_clone));
-    let _ = signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&r_clone));
+    register_shutdown_signals(&running)?;
 
     if config.tui_enabled {
         let proxy_cfg = Arc::clone(&config);
@@ -116,5 +166,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = ingest_handle.join();
 
     info!("ReqLens shutdown completed cleanly.");
+    Ok(())
+}
+
+fn register_shutdown_signals(running: &Arc<AtomicBool>) -> Result<(), Box<dyn std::error::Error>> {
+    for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        let running = Arc::clone(running);
+        // The handler only performs a lock-free atomic store, which is
+        // async-signal-safe. `signal_hook::flag::register` sets a flag to true;
+        // ReqLens uses the inverse `running` convention and therefore needs an
+        // explicit false store.
+        unsafe {
+            signal_hook::low_level::register(signal, move || {
+                running.store(false, Ordering::Relaxed);
+            })?;
+        }
+    }
     Ok(())
 }

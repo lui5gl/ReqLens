@@ -50,6 +50,8 @@ pub fn resolve_config(
 
     let (upstream_addr, upstream_host) = parse_upstream(upstream)?;
 
+    validate_proxy_endpoints(listen_addr, &upstream_addr)?;
+
     if max_body == 0 {
         return Err(ReqLensError::Config(
             "max_body must be greater than 0".into(),
@@ -79,6 +81,28 @@ pub fn resolve_config(
     })
 }
 
+/// Refuse the most common proxy self-loop: binding every local interface and
+/// forwarding back to the same local port. Such a configuration recursively
+/// proxies every request into ReqLens itself, creating connections until the
+/// host CPU is exhausted. Apache must listen on a different port from ReqLens.
+pub fn validate_proxy_endpoints(listen_addr: SocketAddr, upstream_addr: &str) -> Result<()> {
+    let Ok(upstream) = upstream_addr.parse::<SocketAddr>() else {
+        return Ok(());
+    };
+
+    let upstream_is_local = upstream.ip().is_loopback() || upstream.ip().is_unspecified();
+    let listener_covers_localhost =
+        listen_addr.ip().is_unspecified() || listen_addr.ip().is_loopback();
+
+    if upstream.port() == listen_addr.port() && upstream_is_local && listener_covers_localhost {
+        return Err(ReqLensError::Config(format!(
+            "proxy loop detected: --listen {listen_addr} and --upstream http://{upstream_addr} use the same local port. ReqLens and Apache cannot both use that port. For example, configure Apache on 127.0.0.1:8080 and run ReqLens with --listen 0.0.0.0:80 --upstream http://127.0.0.1:8080"
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn load_config() -> Result<AppConfig> {
     let args = parse_cli();
     match args.command {
@@ -106,3 +130,20 @@ pub fn load_config() -> Result<AppConfig> {
     }
 }
 const DEFAULT_MAX_BODY: usize = 65536;
+
+#[cfg(test)]
+mod tests {
+    use super::validate_proxy_endpoints;
+
+    #[test]
+    fn rejects_wildcard_listener_forwarding_to_same_local_port() {
+        let error =
+            validate_proxy_endpoints("0.0.0.0:80".parse().unwrap(), "127.0.0.1:80").unwrap_err();
+        assert!(error.to_string().contains("proxy loop detected"));
+    }
+
+    #[test]
+    fn accepts_separate_proxy_and_apache_ports() {
+        validate_proxy_endpoints("0.0.0.0:80".parse().unwrap(), "127.0.0.1:8080").unwrap();
+    }
+}

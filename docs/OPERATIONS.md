@@ -6,7 +6,7 @@
 | Propiedad | Especificación |
 | :--- | :--- |
 | **Sistema Operativo Objetivo** | Linux (Kernel $\ge$ 5.10 / systemd) |
-| **Permisos de Ejecución** | Usuario dedicado sin privilegios (`reqlens`), sin acceso root |
+| **Permisos de Ejecución** | `root` o `CAP_NET_RAW` para abrir AF_PACKET; SQLite debe permanecer restringido |
 | **Modo de Base de Datos** | SQLite 3 (WAL mode) en `/var/lib/reqlens` (permisos `0700`) |
 | **Audiencia** | Ingenieros de Sistemas, DevOps y SRE |
 
@@ -49,8 +49,11 @@ cargo install --path . --locked --root /usr/local
 
 | Parámetro CLI | Variable de Entorno | Valor por Defecto | Descripción Operativa |
 | :--- | :--- | :--- | :--- |
-| `--listen` | `REQLENS_LISTEN` | `0.0.0.0:8080` | Dirección IP y puerto TCP del listener del proxy |
-| `--upstream` | `REQLENS_UPSTREAM` | `http://127.0.0.1:80` | Dirección HTTP del servidor Apache destino |
+| `sniff --interface` | `REQLENS_INTERFACE` | `any` | Interfaz Linux observada sin modificar tráfico |
+| `sniff --server-ip` | `REQLENS_SERVER_IP` | cualquier IP | IP local de Apache para evitar tráfico ajeno |
+| `sniff --port` | `REQLENS_PORT` | `80` | Puerto HTTP plaintext observado |
+| `--listen` | `REQLENS_LISTEN` | `0.0.0.0:8080` | Listener usado solamente por el modo proxy histórico |
+| `--upstream` | `REQLENS_UPSTREAM` | `http://127.0.0.1:80` | Apache destino usado solamente por el modo proxy |
 | `--db-path` | `REQLENS_DB_PATH` | `./data/reqlens.db` | Ruta absoluta o relativa al archivo SQLite |
 | `--max-body` | `REQLENS_MAX_BODY` | `65536` (64 KB) | Límite máximo en bytes de captura por payload |
 | `--no-redact` | `REQLENS_NO_REDACT` | `false` | Desactiva redacción automática (**no recomendado**) |
@@ -60,17 +63,46 @@ cargo install --path . --locked --root /usr/local
 
 ### Modos de Ejecución
 
-1. **Modo Headless (Por Defecto - Servidor / Daemon):**
+> [!IMPORTANT]
+> En modo `sniff`, Apache continúa siendo el único listener de `:80`; ReqLens
+> abre un socket `AF_PACKET` y recibe copias. No agregues NAT ni muevas Apache.
+> En el modo `proxy` histórico sí deben usarse puertos diferentes; la combinación
+> `--listen 0.0.0.0:80 --upstream http://127.0.0.1:80` se rechaza como bucle.
+
+1. **Modo pasivo recomendado:**
+   ```bash
+   sudo reqlens sniff --interface any --server-ip 172.23.25.36 --port 80
+   ```
+   Apache conserva `:80`; ReqLens requiere root o `CAP_NET_RAW`, pero no recibe,
+   redirige ni reenvía conexiones. Solo IPv4 HTTP/1.x plaintext es inspeccionable.
+
+2. **Modo proxy histórico:**
    ```bash
    reqlens --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
    ```
    Ideal para entornos desatendidos, servicios systemd o contenedores. Las trazas de observabilidad se emiten en formato estructurado `tracing`.
 
-2. **Modo Dashboard Interactivo (TUI):**
+3. **Modo Dashboard Interactivo (TUI):**
    ```bash
    reqlens --tui --listen 0.0.0.0:8080 --upstream http://127.0.0.1:80
    ```
    Lanza el proxy en background y una interfaz visual completa en el terminal con actualización automática, filtros por pestañas (`Todos`, `Errores`, `Lentos`), navegación por filas e inspección modal de cabeceras y payloads.
+
+4. **Captura pasiva y arranque automático:**
+   ```bash
+   # Apache permanece sin cambios en :80.
+   sudo reqlens install \
+     --mode sniff \
+     --interface any \
+     --server-ip 172.23.25.36 \
+     --port 80 \
+     --db-path /var/lib/reqlens/reqlens.db
+   ```
+   `reqlens install` registra el servicio en systemd o SysV, lo inicia en ese
+   momento y lo habilita para los siguientes arranques. No es necesario usar
+   `nohup`. La TUI se abre después con `reqlens tui --db-path
+   /var/lib/reqlens/reqlens.db`; ese subcomando consulta el servicio existente
+   y no ocupa nuevamente el puerto HTTP.
 
 
 ---
@@ -81,18 +113,18 @@ Crea el archivo de servicio en `/etc/systemd/system/reqlens.service`:
 
 ```ini
 [Unit]
-Description=ReqLens — Reverse Proxy de Observabilidad HTTP
+Description=ReqLens — Observabilidad HTTP Pasiva
 Documentation=https://github.com/tu-org/reqlens
 After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=reqlens
-Group=reqlens
-ExecStart=/usr/local/bin/reqlens \
-    --listen 0.0.0.0:8080 \
-    --upstream http://127.0.0.1:80 \
+User=root
+ExecStart=/usr/local/bin/reqlens sniff \
+    --interface any \
+    --server-ip 172.23.25.36 \
+    --port 80 \
     --db-path /var/lib/reqlens/reqlens.db \
     --max-body 65536
 Restart=on-failure
@@ -215,6 +247,10 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 | Síntoma Observado | Causa Raíz Probable | Solución Operativa |
 | :--- | :--- | :--- |
 | `Address already in use` al arrancar | El puerto (`--listen`) está ocupado por otro proceso o instancia previa. | Identificar el proceso en conflicto con `lsof -i :8080` y liberar el puerto o modificar el flag `--listen`. |
+| `proxy loop detected` o CPU elevada con listener `:80` | Se inició el modo proxy antiguo en vez del modo pasivo. | Detenerlo y usar `reqlens sniff --interface any --server-ip IP_DEL_SERVIDOR --port 80`. Apache permanece en `:80`. |
+| `passive capture needs root or CAP_NET_RAW` | El kernel rechazó la apertura de AF_PACKET. | Ejecutar como root o aplicar `setcap cap_net_raw=eip /usr/local/bin/reqlens`. |
+| No se capturan peticiones HTTPS | TLS cifra el protocolo HTTP antes de que AF_PACKET entregue la copia. | El modo pasivo inspecciona solamente HTTP plaintext; use instrumentación tras la terminación TLS si necesita bodies HTTPS. |
+| La TUI no sale con `q` | Había un modal abierto o el terminal reportó eventos repetidos en vez de pulsaciones simples. | La TUI actual acepta pulsaciones/repeticiones; usa `q` desde cualquier vista o `Ctrl+C` como salida universal. |
 | `database is locked` al ejecutar SQL | Una sesión externa mantiene una transacción `BEGIN EXCLUSIVE` sin cerrar. | Identificar y terminar la sesión analítica interactiva colgada. |
 | El archivo `-wal` no disminuye de tamaño | Checkpoints bloqueados por lectores concurrentes de larga duración. | Ejecutar `PRAGMA wal_checkpoint(TRUNCATE);` una vez concluidas las consultas pesadas. |
 | No aparecen peticiones recientes | Persistencia asíncrona por lotes (espera hasta 250 ms) o cola MPSC saturada. | Esperar 250 ms o inspeccionar trazas de `tracing` para descartar eventos descartados por saturación. |
@@ -229,5 +265,3 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 - **Endpoints de Diagnóstico (Roadmap):**
   - `/healthz`: Estado operativo del pipeline (salud del worker de SQLite y estado de la cola).
   - `/metrics`: Métricas de peticiones totales, latencia p50/p95, eventos descartados y errores de disco en formato compatible con Prometheus.
-
-
