@@ -1,3 +1,4 @@
+use crate::config::cli::CaptureMode;
 use crate::config::{parse_upstream, validate_proxy_endpoints};
 use crate::error::Result;
 use std::fs;
@@ -39,6 +40,17 @@ pub fn auto_deploy_to_bin() {
 
 pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
     println!("📦 Instalando ReqLens en el sistema...");
+    let InstallConfig {
+        mode,
+        interface,
+        server_ip,
+        port,
+        listen,
+        upstream,
+        db_path,
+        max_body,
+        no_redact,
+    } = config;
 
     let listen_addr = listen.parse().map_err(|error| {
         crate::error::ReqLensError::Config(format!("Invalid listen address '{listen}': {error}"))
