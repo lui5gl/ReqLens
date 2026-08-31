@@ -23,19 +23,6 @@ impl Drop for ConnectionPermit {
     }
 }
 
-#[cfg(unix)]
-fn poll_ready(listener: &TcpListener, timeout_ms: libc::c_int) -> bool {
-    use std::os::unix::io::AsRawFd;
-    let fd = listener.as_raw_fd();
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-    ret > 0 && (pfd.revents & libc::POLLIN != 0)
-}
-
 pub fn run_server(
     config: Arc<AppConfig>,
     ingest: IngestSender,
@@ -47,16 +34,13 @@ pub fn run_server(
         "Forwarding upstream traffic to http://{}",
         config.upstream_addr
     );
+    // A non-blocking listener lets us observe the shutdown flag without relying
+    // on poll(2). Some older Linux hosts return immediately from poll with an
+    // error, which otherwise turns this loop into a CPU-burning busy spin.
+    listener.set_nonblocking(true)?;
     let active_connections = Arc::new(AtomicUsize::new(0));
 
     while running.load(Ordering::Relaxed) {
-        #[cfg(unix)]
-        {
-            if !poll_ready(&listener, 250) {
-                continue;
-            }
-        }
-
         match listener.accept() {
             Ok((stream, client_addr)) => {
                 let active_connections = Arc::clone(&active_connections);
@@ -81,6 +65,9 @@ pub fn run_server(
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
                     handler::handle_connection(stream, client_addr, cfg, ing);
                 });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
                 if running.load(Ordering::Relaxed) {

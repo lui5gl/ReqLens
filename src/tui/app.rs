@@ -121,11 +121,7 @@ fn handle_key_event(state: &mut TuiState, code: KeyCode) {
         KeyCode::Char('q') => state.should_quit = true,
         KeyCode::Char('/') => state.is_searching = true,
         KeyCode::Char('s') | KeyCode::Char('o') => state.cycle_sort(),
-        KeyCode::Esc => {
-            if !state.search_query.is_empty() {
-                state.clear_search();
-            }
-        }
+        KeyCode::Esc if !state.search_query.is_empty() => state.clear_search(),
         KeyCode::Down | KeyCode::Char('j') => state.next_row(),
         KeyCode::Up | KeyCode::Char('k') => state.previous_row(),
         KeyCode::Enter | KeyCode::Char(' ') => state.toggle_detail(),
