@@ -7,15 +7,15 @@ pub mod tabs;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
-use crate::config::cli::AppConfig;
+use crate::tui::app::TuiConfig;
 use crate::tui::state::TuiState;
 
-pub fn render_ui(frame: &mut Frame, state: &TuiState, config: &AppConfig) {
+pub fn render_ui(frame: &mut Frame, state: &TuiState, config: &TuiConfig) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Length(3),
             Constraint::Min(8),
             Constraint::Length(2),
