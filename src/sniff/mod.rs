@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::info;
 
+const IDLE_CAPTURE_BACKOFF: Duration = Duration::from_millis(50);
+
 #[derive(Debug, Clone)]
 pub struct SniffConfig {
     pub interface: String,
@@ -68,7 +70,7 @@ pub fn run_sniffer(
                     }
                 }
             }
-            Ok(None) => {}
+            Ok(None) => std::thread::sleep(IDLE_CAPTURE_BACKOFF),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }

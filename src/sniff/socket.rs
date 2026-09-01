@@ -77,6 +77,9 @@ impl PacketSocket {
                 _ => Err(error),
             };
         }
+        if size == 0 {
+            return Ok(None);
+        }
         Ok(Some(size as usize))
     }
 }
