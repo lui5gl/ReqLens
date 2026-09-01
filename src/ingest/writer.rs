@@ -53,10 +53,20 @@ pub fn run_writer(db_path: PathBuf, rx: Receiver<HttpEvent>) {
 }
 
 fn flush_batch(conn: &mut Connection, buffer: &mut Vec<HttpEvent>) {
-    if let Err(e) = persist_events(conn, buffer) {
-        error!("Failed to commit batch of {} events: {}", buffer.len(), e);
+    if buffer.is_empty() {
+        return;
     }
-    buffer.clear();
+
+    match persist_events(conn, buffer) {
+        Ok(()) => buffer.clear(),
+        Err(error) => {
+            error!(
+                "Failed to commit batch of {} events; retaining it for retry: {}",
+                buffer.len(),
+                error
+            );
+        }
+    }
 }
 
 fn persist_events(conn: &mut Connection, events: &[HttpEvent]) -> Result<()> {

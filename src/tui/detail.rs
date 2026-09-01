@@ -7,11 +7,16 @@ const RESPONSE_HEADERS_LABEL: &str = "--- Response Headers ---";
 const RESPONSE_BODY_LABEL: &str = "--- Response Body ---";
 
 pub fn format_request_detail(detail: &RequestDetail) -> String {
+    let request_target = detail.query.as_ref().map_or_else(
+        || detail.path.clone(),
+        |query| format!("{}?{query}", detail.path),
+    );
+
     format!(
-        "Request #{id}\nMethod: {method}\nPath: {path}\nStatus: {status}\nLatency: {duration} ms\nTimestamp: {timestamp}\nClient IP: {client_ip}\nUser-Agent: {client_ua}\n\n{request_headers}\n{req_headers}\n\n{request_body}\n{req_body}\n\n{response_headers}\n{resp_headers}\n\n{response_body}\n{resp_body}\n",
+        "Request #{id}\nMethod: {method}\nTarget: {request_target}\nStatus: {status}\nLatency: {duration} ms\nTimestamp: {timestamp}\nClient IP: {client_ip}\nUser-Agent: {client_ua}\n\n{request_headers}\n{req_headers}\n\n{request_body}\n{req_body}\n\n{response_headers}\n{resp_headers}\n\n{response_body}\n{resp_body}\n",
         id = detail.id,
         method = detail.method,
-        path = detail.path,
+        request_target = request_target,
         status = detail.resp_status,
         duration = detail.duration_ms,
         timestamp = detail.timestamp,
@@ -54,6 +59,7 @@ mod tests {
         let content = format_request_detail(&detail);
 
         assert!(content.contains("Request #12"));
+        assert!(content.contains("Target: /health"));
         assert!(content.contains("Host: test"));
         assert!(content.contains("Content-Type: text/plain"));
         assert!(content.ends_with("ok\n"));

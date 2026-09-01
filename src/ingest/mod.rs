@@ -20,8 +20,14 @@ impl IngestSender {
     }
 
     pub fn send_event(&self, event: HttpEvent) {
-        if let Err(TrySendError::Full(_)) = self.tx.try_send(event) {
-            warn!("Ingest queue full (1024 items). Dropping HTTP telemetry event (fail-open).");
+        match self.tx.try_send(event) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                warn!("Ingest queue full (1024 items). Dropping HTTP telemetry event (fail-open).");
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                warn!("Ingest worker disconnected. Dropping HTTP telemetry event.");
+            }
         }
     }
 }

@@ -9,6 +9,12 @@ use std::time::{Duration, Instant};
 const MAX_FLOWS: usize = 16_384;
 const MAX_STREAM_BUFFER: usize = 512 * 1024;
 const MAX_OUT_OF_ORDER_BYTES: usize = 256 * 1024;
+const INCOMPLETE_RESPONSE_STATUS: u16 = 0;
+const INCOMPLETE_RESPONSE_HEADERS: &str = "{}";
+const FLOW_RESET_RESPONSE_BODY: &str =
+    "[CAPTURE INCOMPLETE: TCP flow reset before a complete HTTP response was captured]";
+const FLOW_EXPIRED_RESPONSE_BODY: &str =
+    "[CAPTURE INCOMPLETE: TCP flow expired before a complete HTTP response was captured]";
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct FlowKey {
@@ -86,8 +92,11 @@ impl SniffEngine {
         };
 
         if segment.rst && segment.payload.is_empty() {
-            self.flows.remove(&key);
-            return Vec::new();
+            return self
+                .flows
+                .remove(&key)
+                .map(|flow| incomplete_events(flow, FLOW_RESET_RESPONSE_BODY))
+                .unwrap_or_default();
         }
 
         if !self.flows.contains_key(&key) && self.flows.len() >= MAX_FLOWS {
@@ -141,15 +150,27 @@ impl SniffEngine {
             }
         }
 
-        if segment.rst {
-            self.flows.remove(&key);
+        if segment.rst
+            && let Some(flow) = self.flows.remove(&key)
+        {
+            events.extend(incomplete_events(flow, FLOW_RESET_RESPONSE_BODY));
         }
         events
     }
 
-    pub fn expire_idle(&mut self, timeout: Duration) {
-        self.flows
-            .retain(|_, flow| flow.last_seen.elapsed() < timeout);
+    pub fn expire_idle(&mut self, timeout: Duration) -> Vec<HttpEvent> {
+        let expired_keys = self
+            .flows
+            .iter()
+            .filter(|(_, flow)| flow.last_seen.elapsed() >= timeout)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+
+        expired_keys
+            .into_iter()
+            .filter_map(|key| self.flows.remove(&key))
+            .flat_map(|flow| incomplete_events(flow, FLOW_EXPIRED_RESPONSE_BODY))
+            .collect()
     }
 
     fn classify(&self, segment: &TcpSegment) -> Option<(FlowKey, bool)> {
@@ -197,6 +218,26 @@ impl SniffEngine {
             self.flows.remove(&key);
         }
     }
+}
+
+fn incomplete_events(flow: Flow, reason: &str) -> Vec<HttpEvent> {
+    flow.requests
+        .into_iter()
+        .map(|request| HttpEvent {
+            timestamp: request.timestamp,
+            duration_ms: request.started.elapsed().as_millis() as i64,
+            client_ip: request.client_ip,
+            client_ua: request.client_ua,
+            method: request.method,
+            path: request.path,
+            query: request.query,
+            req_headers: request.headers,
+            req_body: request.body,
+            resp_status: INCOMPLETE_RESPONSE_STATUS,
+            resp_headers: INCOMPLETE_RESPONSE_HEADERS.into(),
+            resp_body: Some(reason.into()),
+        })
+        .collect()
 }
 
 impl Direction {
@@ -315,9 +356,7 @@ fn take_http_message(
                     (100..200).contains(&status) || status == 204 || status == 304
                 }));
     let length = if chunked {
-        let body = &stream[end..];
-        let terminal = body.windows(5).position(|window| window == b"0\r\n\r\n")?;
-        end + terminal + 5
+        end + chunked_body_len(&stream[end..])?
     } else if let Some(content_length) = content_length {
         end + content_length
     } else if request || response_has_no_body {
@@ -328,6 +367,33 @@ fn take_http_message(
         return None;
     };
     (stream.len() >= length).then(|| stream.drain(..length).collect())
+}
+
+fn chunked_body_len(body: &[u8]) -> Option<usize> {
+    let mut offset = 0;
+
+    loop {
+        let line_end = body[offset..]
+            .windows(2)
+            .position(|window| window == b"\r\n")?;
+        let size_line_end = offset + line_end;
+        let size_text = std::str::from_utf8(&body[offset..size_line_end]).ok()?;
+        let size = usize::from_str_radix(size_text.split(';').next()?.trim(), 16).ok()?;
+        offset = size_line_end + 2;
+
+        if size == 0 {
+            let trailer_end = body[offset..]
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")?;
+            return Some(offset + trailer_end + 4);
+        }
+
+        let chunk_end = offset.checked_add(size)?;
+        if body.get(chunk_end..chunk_end + 2)? != b"\r\n" {
+            return None;
+        }
+        offset = chunk_end + 2;
+    }
 }
 
 fn parse_request(
@@ -524,5 +590,40 @@ mod tests {
         assert_eq!(events[0].path, "/guardar");
         assert_eq!(events[0].resp_status, 200);
         assert_eq!(events[0].resp_body.as_deref(), Some("OK"));
+    }
+
+    #[test]
+    fn preserves_request_when_tcp_flow_resets_before_response() {
+        let mut engine = SniffEngine::new(None, 80, 65_536, true);
+        let request = b"GET /interrupted HTTP/1.1\r\nHost: test\r\n\r\n";
+        assert!(engine.process(segment(true, 100, request)).is_empty());
+
+        let mut reset = segment(false, 200, b"");
+        reset.rst = true;
+        let events = engine.process(reset);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path, "/interrupted");
+        assert_eq!(events[0].resp_status, 0);
+        assert!(
+            events[0]
+                .resp_body
+                .as_deref()
+                .is_some_and(|body| body.contains("CAPTURE INCOMPLETE"))
+        );
+    }
+
+    #[test]
+    fn captures_chunked_response_with_extensions_and_trailers() {
+        let mut engine = SniffEngine::new(None, 80, 65_536, true);
+        let request = b"GET /chunked HTTP/1.1\r\nHost: test\r\n\r\n";
+        assert!(engine.process(segment(true, 100, request)).is_empty());
+
+        let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;foo=bar\r\nOK\r\n0\r\nX-Request-Id: req-1\r\n\r\n";
+        let events = engine.process(segment(false, 200, response));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path, "/chunked");
+        assert_eq!(events[0].resp_status, 200);
     }
 }

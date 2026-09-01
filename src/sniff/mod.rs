@@ -75,7 +75,9 @@ pub fn run_sniffer(
         }
 
         if last_cleanup.elapsed() >= Duration::from_secs(1) {
-            engine.expire_idle(Duration::from_secs(60));
+            for event in engine.expire_idle(Duration::from_secs(60)) {
+                ingest.send_event(event);
+            }
             last_cleanup = Instant::now();
         }
     }

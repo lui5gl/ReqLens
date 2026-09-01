@@ -128,7 +128,10 @@ impl TuiState {
     }
 
     pub fn scroll_detail_down(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_add(1);
+        self.detail_scroll = self
+            .detail_scroll
+            .saturating_add(1)
+            .min(self.detail_max_scroll());
     }
 
     pub fn scroll_detail_page_up(&mut self, page_size: u16) {
@@ -136,11 +139,20 @@ impl TuiState {
     }
 
     pub fn scroll_detail_page_down(&mut self, page_size: u16) {
-        self.detail_scroll = self.detail_scroll.saturating_add(page_size);
+        self.detail_scroll = self
+            .detail_scroll
+            .saturating_add(page_size)
+            .min(self.detail_max_scroll());
     }
 
     pub fn detail_text(&self) -> Option<String> {
         self.selected_detail.as_ref().map(format_request_detail)
+    }
+
+    fn detail_max_scroll(&self) -> u16 {
+        self.detail_text()
+            .map(|text| text.lines().count().saturating_sub(1) as u16)
+            .unwrap_or_default()
     }
 
     pub fn set_detail_notice(&mut self, notice: String) {

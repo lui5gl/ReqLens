@@ -24,15 +24,23 @@ pub fn render_table(frame: &mut Frame, area: Rect, state: &TuiState) {
     )
     .bottom_margin(1);
 
+    let visible_row_count = usize::from(area.height.saturating_sub(4)).max(1);
+    let visible_start = state
+        .selected_index
+        .saturating_add(1)
+        .saturating_sub(visible_row_count);
     let rows: Vec<Row> = state
         .requests
         .iter()
         .enumerate()
+        .skip(visible_start)
+        .take(visible_row_count)
         .map(|(idx, req)| {
             let is_selected = idx == state.selected_index;
             build_table_row(req, is_selected)
         })
         .collect();
+    let visible_end = visible_start.saturating_add(rows.len());
 
     let widths = [
         Constraint::Length(8),
@@ -44,13 +52,14 @@ pub fn render_table(frame: &mut Frame, area: Rect, state: &TuiState) {
         Constraint::Min(20),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            " Peticiones Capturadas ({}) ",
-            state.requests.len()
-        )))
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default().borders(Borders::ALL).title(format!(
+            " Peticiones Capturadas ({}) | {}-{} ",
+            state.requests.len(),
+            visible_start.saturating_add(1),
+            visible_end
+        )),
+    );
 
     frame.render_widget(table, area);
 }

@@ -1,9 +1,9 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use crate::tui::detail::format_request_detail;
 use crate::tui::model::RequestDetail;
 
 pub fn render_detail_modal(
@@ -16,68 +16,6 @@ pub fn render_detail_modal(
     let popup_area = centered_rect(85, 80, area);
     frame.render_widget(Clear, popup_area);
 
-    let status_color = if detail.resp_status >= 400 {
-        Color::Red
-    } else {
-        Color::Green
-    };
-    let content = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("Petición #{} ", detail.id),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("[{} {}] ", detail.method, detail.path),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("Status: {} ", detail.resp_status),
-                Style::default()
-                    .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("Latencia: {} ms", detail.duration_ms),
-                Style::default().fg(Color::Magenta),
-            ),
-        ]),
-        Line::from(vec![Span::raw(format!(
-            "Timestamp: {} | IP Cliente: {} | UA: {}",
-            detail.timestamp,
-            detail.client_ip,
-            detail.client_ua.as_deref().unwrap_or("-")
-        ))]),
-        Line::from(Span::raw("─".repeat(80))),
-        Line::from(Span::styled(
-            "--- Request Headers (Permitidos) ---",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(detail.req_headers.clone()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "--- Request Body (Con Redacción Fail-Safe) ---",
-            Style::default().fg(Color::Green),
-        )),
-        Line::from(detail.req_body.as_deref().unwrap_or("(vacío)")),
-        Line::from(""),
-        Line::from(Span::styled(
-            "--- Response Headers ---",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(detail.resp_headers.clone()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "--- Response Body ---",
-            Style::default().fg(Color::Green),
-        )),
-        Line::from(detail.resp_body.as_deref().unwrap_or("(vacío)")),
-    ];
-
     let title = match notice {
         Some(message) => format!(" {message} "),
         None => " Detalle: [c] copiar, [PgUp/PgDn] pagina, [Esc/Enter] cerrar ".into(),
@@ -87,7 +25,7 @@ pub fn render_detail_modal(
         .title(title)
         .border_style(Style::default().fg(Color::Yellow));
 
-    let paragraph = Paragraph::new(content)
+    let paragraph = Paragraph::new(format_request_detail(detail))
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
