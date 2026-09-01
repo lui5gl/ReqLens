@@ -15,13 +15,15 @@ use std::time::Duration;
 use super::model::FilterTab;
 use super::state::TuiState;
 use super::views::render_ui;
-use crate::error::Result;
+use crate::error::{ReqLensError, Result};
 
 const DEFAULT_TERMINAL_COLUMNS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 const DETAIL_PAGE_SCROLL: u16 = 12;
 const OSC52_PREFIX: &str = "\x1b]52;c;";
 const OSC52_SUFFIX: &str = "\x07";
+const INPUT_READER_ERROR: &str = "Failed to initialize input reader";
+const INPUT_READER_HINT: &str = "ReqLens could not read keyboard input from this terminal. Run it from an interactive SSH/console TTY with TERM set (for example: export TERM=xterm), then retry.";
 
 #[derive(Debug, Clone)]
 pub enum TuiSource {
@@ -68,13 +70,22 @@ pub fn run_tui_app(config: &TuiConfig) -> Result<()> {
     };
 
     let mut state = TuiState::new(config.db_path.clone());
-    let res = run_loop(&mut terminal, &mut state, config);
+    let res = run_loop(&mut terminal, &mut state, config).map_err(describe_tui_input_error);
 
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
 
     res
+}
+
+fn describe_tui_input_error(error: ReqLensError) -> ReqLensError {
+    match error {
+        ReqLensError::Io(error) if error.to_string().contains(INPUT_READER_ERROR) => {
+            ReqLensError::Config(INPUT_READER_HINT.into())
+        }
+        error => error,
+    }
 }
 
 fn create_terminal(

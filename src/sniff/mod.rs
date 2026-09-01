@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tracing::info;
 
-const IDLE_CAPTURE_BACKOFF: Duration = Duration::from_millis(50);
+const CAPTURE_PERMISSION_HINT: &str = "passive capture needs root or CAP_NET_RAW; run as root or apply: setcap cap_net_raw=eip /usr/local/bin/reqlens";
 
 #[derive(Debug, Clone)]
 pub struct SniffConfig {
@@ -38,15 +38,14 @@ pub fn run_sniffer(
     running: Arc<AtomicBool>,
 ) -> Result<()> {
     let receive_timeout = Duration::from_millis(250);
-    let capture = socket::PacketSocket::open(&config.interface, receive_timeout).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::PermissionDenied {
-            ReqLensError::Config(
-                "passive capture needs root or CAP_NET_RAW; run as root or apply: setcap cap_net_raw=eip /usr/local/bin/reqlens".into(),
-            )
-        } else {
-            error.into()
-        }
-    })?;
+    let capture = socket::PacketSocket::open(&config.interface, config.port, receive_timeout)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                ReqLensError::Config(CAPTURE_PERMISSION_HINT.into())
+            } else {
+                error.into()
+            }
+        })?;
     let mut engine = SniffEngine::new(
         config.server_ip,
         config.port,
@@ -70,7 +69,7 @@ pub fn run_sniffer(
                     }
                 }
             }
-            Ok(None) => std::thread::sleep(IDLE_CAPTURE_BACKOFF),
+            Ok(None) => {}
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.into()),
         }
