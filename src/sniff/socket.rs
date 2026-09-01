@@ -11,7 +11,7 @@ pub struct PacketSocket {
 }
 
 impl PacketSocket {
-    pub fn open(interface: &str) -> io::Result<Self> {
+    pub fn open(interface: &str, receive_timeout: Duration) -> io::Result<Self> {
         let fd = unsafe {
             libc::socket(
                 libc::AF_PACKET,
@@ -56,28 +56,12 @@ impl PacketSocket {
             return Err(io::Error::last_os_error());
         }
 
+        set_receive_timeout(fd.as_raw_fd(), receive_timeout)?;
+
         Ok(Self { fd })
     }
 
-    pub fn receive(&self, buffer: &mut [u8], timeout: Duration) -> io::Result<Option<usize>> {
-        let mut descriptor = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ready = unsafe {
-            libc::poll(
-                &mut descriptor,
-                1,
-                timeout.as_millis().min(i32::MAX as u128) as i32,
-            )
-        };
-        if ready < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if ready == 0 {
-            return Ok(None);
-        }
+    pub fn receive(&self, buffer: &mut [u8]) -> io::Result<Option<usize>> {
         let size = unsafe {
             libc::recv(
                 self.fd.as_raw_fd(),
@@ -87,8 +71,32 @@ impl PacketSocket {
             )
         };
         if size < 0 {
-            return Err(io::Error::last_os_error());
+            let error = io::Error::last_os_error();
+            return match error.kind() {
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Ok(None),
+                _ => Err(error),
+            };
         }
         Ok(Some(size as usize))
     }
+}
+
+fn set_receive_timeout(fd: libc::c_int, timeout: Duration) -> io::Result<()> {
+    let timeout = libc::timeval {
+        tv_sec: timeout.as_secs().try_into().unwrap_or(libc::time_t::MAX),
+        tv_usec: i64::from(timeout.subsec_micros()),
+    };
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            (&timeout as *const libc::timeval).cast(),
+            mem::size_of::<libc::timeval>() as libc::socklen_t,
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }

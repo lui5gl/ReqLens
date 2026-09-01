@@ -35,7 +35,8 @@ pub fn run_sniffer(
     ingest: IngestSender,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
-    let capture = socket::PacketSocket::open(&config.interface).map_err(|error| {
+    let receive_timeout = Duration::from_millis(250);
+    let capture = socket::PacketSocket::open(&config.interface, receive_timeout).map_err(|error| {
         if error.kind() == std::io::ErrorKind::PermissionDenied {
             ReqLensError::Config(
                 "passive capture needs root or CAP_NET_RAW; run as root or apply: setcap cap_net_raw=eip /usr/local/bin/reqlens".into(),
@@ -59,7 +60,7 @@ pub fn run_sniffer(
     );
 
     while running.load(Ordering::Relaxed) {
-        match capture.receive(&mut buffer, Duration::from_millis(250)) {
+        match capture.receive(&mut buffer) {
             Ok(Some(size)) => {
                 if let Some(segment) = packet::parse_ipv4_tcp(&buffer[..size], config.port) {
                     for event in engine.process(segment) {
