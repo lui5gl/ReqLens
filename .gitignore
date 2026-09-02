@@ -3,4 +3,5 @@
 *.db
 *.db-wal
 *.db-shm
+web-ui/node_modules/
 

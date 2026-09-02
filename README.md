@@ -45,7 +45,7 @@ conexiones y no modifica el camino entre los clientes y Apache.
 
 ## 📊 Capacidades y Casos de Uso
 
-- **Dashboard Interactivo Integrado (TUI):** Visualiza peticiones en tiempo real, filtra errores (≥400), detecta peticiones lentas (≥500ms) e inspecciona headers y cuerpos completos sin abrir `sqlite3` (activable mediante `--tui`).
+- **Dashboard Web Integrado:** Visualiza peticiones en tiempo real, filtra errores (≥400), detecta peticiones lentas (≥500ms) e inspecciona headers y cuerpos completos sin abrir `sqlite3`. Se sirve solo en loopback para no exponer la telemetría capturada.
 - **Modo Servidor Headless (Producción):** Ejecución sin UI, ideal para demonios de `systemd`, contenedores y entornos desatendidos.
 - **Diagnóstico y Debugging Forense:** Inspecciona el payload exacto de peticiones que generaron excepciones en backend.
 - **Auditoría de Endpoints Críticos:** Registra la actividad y modificaciones en APIs sensibles con trazabilidad de IP real del cliente (`X-Forwarded-For`).
@@ -61,8 +61,10 @@ sudo reqlens sniff \
   --interface any \
   --server-ip 172.23.25.36 \
   --port 80 \
-  --db-path /var/lib/reqlens/reqlens.db \
-  --tui
+  --db-path /var/lib/reqlens/reqlens.db
+
+# En otra terminal, abre el dashboard local de la captura.
+reqlens web --db-path /var/lib/reqlens/reqlens.db
 
 # Instala el mismo modo como servicio de arranque automático (modo por defecto).
 sudo reqlens install \

@@ -7,6 +7,7 @@ pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 pub const DEFAULT_UPSTREAM: &str = "http://127.0.0.1:80";
 pub const DEFAULT_DB_PATH: &str = "./data/reqlens.db";
 pub const DEFAULT_MAX_BODY: usize = 65536;
+pub const DEFAULT_WEB_LISTEN: &str = "127.0.0.1:8420";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -40,9 +41,6 @@ pub struct CliArgs {
 
     #[arg(long, env = "REQLENS_NO_REDACT", default_value_t = false)]
     pub no_redact: bool,
-
-    #[arg(long, env = "REQLENS_TUI", default_value_t = false)]
-    pub tui: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -69,10 +67,6 @@ pub enum Commands {
 
         #[arg(long, env = "REQLENS_NO_REDACT", default_value_t = false)]
         no_redact: bool,
-
-        /// Abre la TUI consumiendo la misma base SQLite del sniffer
-        #[arg(long, env = "REQLENS_TUI", default_value_t = false)]
-        tui: bool,
     },
 
     /// Inicia el proxy reverso de observabilidad
@@ -92,15 +86,16 @@ pub enum Commands {
 
         #[arg(long, env = "REQLENS_NO_REDACT", default_value_t = false)]
         no_redact: bool,
-
-        #[arg(long, env = "REQLENS_TUI", default_value_t = false)]
-        tui: bool,
     },
-    /// Abre el dashboard interactivo TUI para explorar peticiones y errores
-    Tui {
+    /// Abre un dashboard web local de solo lectura para explorar peticiones
+    Web {
         /// Sobrescribe la base SQLite configurada durante `reqlens install`
         #[arg(long, env = "REQLENS_DB_PATH")]
         db_path: Option<PathBuf>,
+
+        /// Dirección local del dashboard web
+        #[arg(long, env = "REQLENS_WEB_LISTEN", default_value = DEFAULT_WEB_LISTEN)]
+        listen: SocketAddr,
     },
     /// Consulta el estado del servicio y métricas de la base de datos
     Status {
@@ -161,5 +156,4 @@ pub struct AppConfig {
     pub db_path: PathBuf,
     pub max_body: usize,
     pub redact_enabled: bool,
-    pub tui_enabled: bool,
 }

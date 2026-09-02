@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::tui::repo::{fetch_stats, open_readonly_conn};
+use crate::web::repo::{fetch_stats, open_readonly_conn};
 use std::fs;
 use std::path::Path;
 use std::process::Command;

@@ -113,7 +113,7 @@ src/
 ├── proxy/      # Reverse proxy opcional basado en sockets POSIX
 ├── capture/    # HttpEvent, headers y redacción
 ├── ingest/     # Canal acotado, schema y writer SQLite
-├── tui/        # Visor local de SQLite (compatibilidad)
+├── web/        # API local y servidor de assets del dashboard web
 ├── config/     # CLI, variables de entorno y validación
 └── ops/        # Instalación systemd/SysV y ciclo de vida
 ```

@@ -52,7 +52,6 @@ fn test_e2e_proxy_and_telemetry_capture() {
         db_path: db_path.clone(),
         max_body: 65536,
         redact_enabled: true,
-        tui_enabled: false,
     });
 
     let (ingest_sender, ingest_handle) = ingest::start_ingest_worker(db_path.clone());

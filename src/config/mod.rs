@@ -1,7 +1,7 @@
 pub mod cli;
 pub mod installed;
 
-use self::cli::{AppConfig, CliArgs, Commands, DEFAULT_DB_PATH, DEFAULT_LISTEN, DEFAULT_UPSTREAM};
+use self::cli::{AppConfig, CliArgs, Commands};
 use crate::error::{ReqLensError, Result};
 use clap::Parser;
 use std::fs;
@@ -43,7 +43,6 @@ pub fn resolve_config(
     db_path: PathBuf,
     max_body: usize,
     no_redact: bool,
-    tui: bool,
 ) -> Result<AppConfig> {
     let listen_addr: SocketAddr = listen
         .parse()
@@ -78,7 +77,6 @@ pub fn resolve_config(
         db_path,
         max_body,
         redact_enabled: !no_redact,
-        tui_enabled: tui,
     })
 }
 
@@ -113,28 +111,16 @@ pub fn load_config() -> Result<AppConfig> {
             db_path,
             max_body,
             no_redact,
-            tui,
-        }) => resolve_config(&listen, &upstream, db_path, max_body, no_redact, tui),
-        Some(Commands::Tui { db_path }) => resolve_config(
-            DEFAULT_LISTEN,
-            DEFAULT_UPSTREAM,
-            db_path.unwrap_or_else(|| PathBuf::from(DEFAULT_DB_PATH)),
-            DEFAULT_MAX_BODY,
-            false,
-            true,
-        ),
+        }) => resolve_config(&listen, &upstream, db_path, max_body, no_redact),
         _ => resolve_config(
             &args.listen,
             &args.upstream,
             args.db_path,
             args.max_body,
             args.no_redact,
-            args.tui,
         ),
     }
 }
-const DEFAULT_MAX_BODY: usize = 65536;
-
 #[cfg(test)]
 mod tests {
     use super::validate_proxy_endpoints;

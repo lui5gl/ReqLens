@@ -229,7 +229,7 @@ exit 0
     }
 
     println!(
-        "\n🎉 Instalación completada. Ahora puedes ejecutar 'reqlens' o 'reqlens tui' desde cualquier directorio.\n"
+        "\n🎉 Instalación completada. Ahora puedes ejecutar 'reqlens web' desde cualquier directorio.\n"
     );
     Ok(())
 }
