@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 const BLACKLISTED_HEADERS: &[&str] = &[
     "authorization",
@@ -22,7 +22,7 @@ const ALLOWED_HEADERS: &[&str] = &[
 ];
 
 pub fn serialize_headers(headers: &[(String, String)]) -> String {
-    let mut map = HashMap::new();
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (name, value) in headers {
         let name_str = name.to_ascii_lowercase();
@@ -32,7 +32,7 @@ pub fn serialize_headers(headers: &[(String, String)]) -> String {
         }
 
         if ALLOWED_HEADERS.contains(&name_str.as_str()) {
-            map.insert(name_str, value.clone());
+            map.entry(name_str).or_default().push(value.clone());
         }
     }
 
@@ -53,16 +53,16 @@ mod tests {
         ];
 
         let serialized = serialize_headers(&headers);
-        let parsed: HashMap<String, String> =
+        let parsed: BTreeMap<String, Vec<String>> =
             serde_json::from_str(&serialized).expect("Valid JSON");
 
         assert_eq!(
             parsed.get("content-type"),
-            Some(&"application/json".to_string())
+            Some(&vec!["application/json".to_string()])
         );
         assert_eq!(
             parsed.get("user-agent"),
-            Some(&"ReqLens-Agent/1.0".to_string())
+            Some(&vec!["ReqLens-Agent/1.0".to_string()])
         );
         assert_eq!(parsed.get("authorization"), None);
         assert_eq!(parsed.get("cookie"), None);

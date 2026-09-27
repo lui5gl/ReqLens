@@ -83,9 +83,22 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &TuiState) {
         ),
     ]);
 
+    let error_line = state.data_error.as_deref().map(|error| {
+        Line::from(Span::styled(
+            format!("Error de datos: {error}"),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))
+    });
+
     let search_block = Block::default()
         .borders(Borders::ALL)
         .title(" Búsqueda y Ordenamiento ");
-    let search_widget = Paragraph::new(filter_info).block(search_block);
+    let search_widget = Paragraph::new(
+        error_line
+            .into_iter()
+            .chain([filter_info])
+            .collect::<Vec<_>>(),
+    )
+    .block(search_block);
     frame.render_widget(search_widget, chunks[1]);
 }

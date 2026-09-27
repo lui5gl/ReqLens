@@ -2,13 +2,28 @@ use crate::capture::HttpEvent;
 use crate::error::Result;
 use crate::ingest::schema::initialize_schema;
 use rusqlite::{Connection, params};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 use tracing::{error, info};
 
 pub const BATCH_SIZE: usize = 100;
 pub const FLUSH_INTERVAL_MS: u64 = 250;
+
+#[cfg(unix)]
+fn restrict_database_permissions(db_path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(db_path)?.permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(db_path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_database_permissions(_db_path: &Path) -> Result<()> {
+    Ok(())
+}
 
 pub fn run_writer(db_path: PathBuf, rx: Receiver<HttpEvent>) {
     let mut conn = match Connection::open(&db_path) {
@@ -18,6 +33,14 @@ pub fn run_writer(db_path: PathBuf, rx: Receiver<HttpEvent>) {
             return;
         }
     };
+
+    if let Err(error) = restrict_database_permissions(&db_path) {
+        error!(
+            "Failed to restrict SQLite permissions at {:?}: {}",
+            db_path, error
+        );
+        return;
+    }
 
     if let Err(e) = initialize_schema(&conn) {
         error!("Failed to initialize database schema: {}", e);

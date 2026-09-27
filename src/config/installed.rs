@@ -45,6 +45,23 @@ pub fn save_installed_config(config: &InstalledConfig) -> Result<()> {
     let config_path = directory.join(INSTALLED_CONFIG_FILE);
     let content = serde_json::to_string_pretty(config)?;
     fs::write(&temporary_path, content)?;
+    restrict_config_permissions(&temporary_path)?;
     fs::rename(temporary_path, config_path)?;
+    restrict_config_permissions(Path::new(INSTALLED_CONFIG_PATH))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_config_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_config_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }

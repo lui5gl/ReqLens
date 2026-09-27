@@ -97,6 +97,12 @@ pub fn install_service(config: InstallConfig<'_>) -> Result<()> {
         .args(["-r", "-s", "/usr/sbin/nologin", "reqlens"])
         .status();
 
+    if let Some(parent) = config.db_path.parent() {
+        let _ = Command::new("chown")
+            .args(["-R", "reqlens:reqlens", &parent.to_string_lossy()])
+            .status();
+    }
+
     let redact_flag = if config.no_redact { " --no-redact" } else { "" };
     let server_ip_flag = config
         .server_ip
@@ -129,7 +135,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=reqlens
+Group=reqlens
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={}
 ExecStart=/usr/local/bin/reqlens {}
 Restart=on-failure
 RestartSec=5s
@@ -138,6 +153,11 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 "#,
+        config
+            .db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("/var/lib/reqlens"))
+            .display(),
         exec_args
     );
 

@@ -26,7 +26,7 @@ fn test_e2e_proxy_and_telemetry_capture() {
                 Ok((mut stream, _)) => {
                     let mut buf = [0u8; 1024];
                     let _ = stream.read(&mut buf);
-                    let resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{\"status\":\"created\",\"user_id\":42}";
+                    let resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 33\r\nConnection: close\r\n\r\n{\"status\":\"created\",\"user_id\":42}";
                     let _ = stream.write_all(resp);
                     let _ = stream.flush();
                 }
@@ -69,7 +69,7 @@ fn test_e2e_proxy_and_telemetry_capture() {
     thread::sleep(Duration::from_millis(100));
 
     let mut client_stream = TcpStream::connect(proxy_addr).expect("Connect to proxy failed");
-    let req_payload = "POST /api/v1/users HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAuthorization: Bearer secret-token-should-not-persist\r\nContent-Length: 48\r\n\r\n{\"username\":\"testuser\",\"password\":\"mypassword123\"}";
+    let req_payload = "POST /api/v1/users HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAuthorization: Bearer secret-token-should-not-persist\r\nContent-Length: 50\r\n\r\n{\"username\":\"testuser\",\"password\":\"mypassword123\"}";
     client_stream.write_all(req_payload.as_bytes()).unwrap();
     client_stream.flush().unwrap();
 

@@ -16,6 +16,7 @@ pub struct TuiState {
     pub should_quit: bool,
     pub detail_scroll: u16,
     pub detail_notice: Option<String>,
+    pub data_error: Option<String>,
 }
 
 impl TuiState {
@@ -33,30 +34,52 @@ impl TuiState {
             should_quit: false,
             detail_scroll: 0,
             detail_notice: None,
+            data_error: None,
         };
         state.reload_data();
         state
     }
 
     pub fn reload_data(&mut self) {
-        if let Ok(Some(conn)) = open_readonly_conn(&self.db_path) {
-            if let Ok(stats) = fetch_stats(&conn) {
-                self.stats = stats;
+        self.data_error = None;
+        let Some(conn) = (match open_readonly_conn(&self.db_path) {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.data_error = Some(format!("No se pudo abrir SQLite: {error}"));
+                return;
             }
-            if let Ok(reqs) = fetch_requests(
-                &conn,
-                self.active_tab,
-                self.sort_field,
-                &self.search_query,
-                100,
-            ) {
-                self.requests = reqs;
-                if self.requests.is_empty() {
-                    self.selected_index = 0;
-                } else if self.selected_index >= self.requests.len() {
-                    self.selected_index = self.requests.len() - 1;
-                }
+        }) else {
+            self.requests.clear();
+            self.stats = DashboardStats::default();
+            return;
+        };
+
+        self.stats = match fetch_stats(&conn) {
+            Ok(stats) => stats,
+            Err(error) => {
+                self.data_error = Some(format!("No se pudieron leer las estadísticas: {error}"));
+                return;
             }
+        };
+
+        self.requests = match fetch_requests(
+            &conn,
+            self.active_tab,
+            self.sort_field,
+            &self.search_query,
+            100,
+        ) {
+            Ok(requests) => requests,
+            Err(error) => {
+                self.data_error = Some(format!("No se pudieron leer las solicitudes: {error}"));
+                return;
+            }
+        };
+
+        if self.requests.is_empty() {
+            self.selected_index = 0;
+        } else if self.selected_index >= self.requests.len() {
+            self.selected_index = self.requests.len() - 1;
         }
     }
 
@@ -111,13 +134,33 @@ impl TuiState {
             return;
         }
 
-        if let Some(summary) = self.requests.get(self.selected_index)
-            && let Ok(Some(conn)) = open_readonly_conn(&self.db_path)
-            && let Ok(Some(detail)) = fetch_request_detail(&conn, summary.id)
-        {
-            self.selected_detail = Some(detail);
-            self.detail_scroll = 0;
-            self.detail_notice = None;
+        let Some(summary) = self.requests.get(self.selected_index) else {
+            return;
+        };
+        let conn = match open_readonly_conn(&self.db_path) {
+            Ok(Some(connection)) => connection,
+            Ok(None) => {
+                self.detail_notice = Some("La base de datos todavía no existe".into());
+                return;
+            }
+            Err(error) => {
+                self.detail_notice = Some(format!("No se pudo abrir SQLite: {error}"));
+                return;
+            }
+        };
+
+        match fetch_request_detail(&conn, summary.id) {
+            Ok(Some(detail)) => {
+                self.selected_detail = Some(detail);
+                self.detail_scroll = 0;
+                self.detail_notice = None;
+            }
+            Ok(None) => {
+                self.detail_notice = Some("La solicitud ya no está disponible".into());
+            }
+            Err(error) => {
+                self.detail_notice = Some(format!("No se pudo leer el detalle: {error}"));
+            }
         }
     }
 

@@ -3,16 +3,12 @@
 > Especificación del esquema físico SQLite, reglas de serialización, formato de payloads y catálogo de consultas analíticas.
 > Para la visión arquitectónica global → [ARCHITECTURE.md](../ARCHITECTURE.md). Para manual de operaciones y backups → [docs/OPERATIONS.md](OPERATIONS.md).
 
-| Propiedad | Especificación |
-| :--- | :--- |
-| **Versión de Modelo** | 0.1.5 |
+| Propiedad                  | Especificación    |
+| :------------------------- | :---------------- |
+| **Versión de Modelo**      | 0.1.20            |
 | **Motor de Base de Datos** | SQLite 3 embebido |
 
-
-
-
-
-| **Modo de Transacción / Diario** | WAL (*Write-Ahead Logging*) |
+| **Modo de Transacción / Diario** | WAL (_Write-Ahead Logging_) |
 | **Estructura de Tabla** | Tabla única desnormalizada (`requests`) |
 | **Audiencia** | Desarrolladores, Analistas de Datos y Operadores SRE |
 
@@ -60,21 +56,21 @@ CREATE INDEX IF NOT EXISTS idx_requests_client_ip   ON requests (client_ip);
 
 ### Diccionario de Columnas
 
-| Columna | Tipo SQLite | Constraints | Índice | Descripción |
-| :--- | :--- | :--- | :---: | :--- |
-| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | Sí | Secuencia única de correlación de eventos. |
-| `timestamp` | `TEXT` | `NOT NULL` | Sí | Marca temporal UTC en formato ISO-8601 con milisegundos. |
-| `duration_ms` | `INTEGER` | `NOT NULL` | No | Latencia total de la petición (desde recepción hasta respuesta de Apache) en ms. |
-| `client_ip` | `TEXT` | `NOT NULL` | Sí | IP del socket cliente (o último salto de `X-Forwarded-For`). |
-| `client_ua` | `TEXT` | `NULL` | No | Contenido del encabezado `User-Agent`. |
-| `method` | `TEXT` | `NOT NULL` | Sí | Verbo HTTP normalizado en mayúsculas (`GET`, `POST`, `PUT`, etc.). |
-| `path` | `TEXT` | `NOT NULL` | Sí | Ruta del endpoint sin query string (ej. `/api/v1/auth/login`). |
-| `query` | `TEXT` | `NULL` | No | Parámetros de consulta crudos (ej. `token=xyz&debug=1`). |
-| `req_headers` | `TEXT (JSON)` | `NOT NULL` | No | Objeto JSON plano con los headers permitidos por la allowlist. |
-| `req_body` | `TEXT` | `NULL` | No | Cuerpo del request (sujeto a redacción de secretos y truncado). |
-| `resp_status` | `INTEGER` | `NOT NULL` | Sí | Código de estado HTTP retornado por Apache (ej. `200`, `404`, `500`). |
-| `resp_headers`| `TEXT (JSON)` | `NOT NULL` | No | Objeto JSON plano con los headers de respuesta permitidos. |
-| `resp_body` | `TEXT` | `NULL` | No | Cuerpo de la respuesta devuelta por Apache (sujeto a truncado). |
+| Columna        | Tipo SQLite   | Constraints                 | Índice | Descripción                                                                      |
+| :------------- | :------------ | :-------------------------- | :----: | :------------------------------------------------------------------------------- |
+| `id`           | `INTEGER`     | `PRIMARY KEY AUTOINCREMENT` |   Sí   | Secuencia única de correlación de eventos.                                       |
+| `timestamp`    | `TEXT`        | `NOT NULL`                  |   Sí   | Marca temporal UTC en formato ISO-8601 con milisegundos.                         |
+| `duration_ms`  | `INTEGER`     | `NOT NULL`                  |   No   | Latencia total de la petición (desde recepción hasta respuesta de Apache) en ms. |
+| `client_ip`    | `TEXT`        | `NOT NULL`                  |   Sí   | IP del socket cliente (o último salto de `X-Forwarded-For`).                     |
+| `client_ua`    | `TEXT`        | `NULL`                      |   No   | Contenido del encabezado `User-Agent`.                                           |
+| `method`       | `TEXT`        | `NOT NULL`                  |   Sí   | Verbo HTTP normalizado en mayúsculas (`GET`, `POST`, `PUT`, etc.).               |
+| `path`         | `TEXT`        | `NOT NULL`                  |   Sí   | Ruta del endpoint sin query string (ej. `/api/v1/auth/login`).                   |
+| `query`        | `TEXT`        | `NULL`                      |   No   | Parámetros de consulta crudos (ej. `token=xyz&debug=1`).                         |
+| `req_headers`  | `TEXT (JSON)` | `NOT NULL`                  |   No   | Mapa JSON de headers permitidos a listas de valores, preservando duplicados.     |
+| `req_body`     | `TEXT`        | `NULL`                      |   No   | Cuerpo del request (sujeto a redacción de secretos y truncado).                  |
+| `resp_status`  | `INTEGER`     | `NOT NULL`                  |   Sí   | Código de estado HTTP retornado por Apache (ej. `200`, `404`, `500`).            |
+| `resp_headers` | `TEXT (JSON)` | `NOT NULL`                  |   No   | Mapa JSON de headers permitidos a listas de valores, preservando duplicados.     |
+| `resp_body`    | `TEXT`        | `NULL`                      |   No   | Cuerpo de la respuesta devuelta por Apache (sujeto a truncado).                  |
 
 ---
 
@@ -82,12 +78,12 @@ CREATE INDEX IF NOT EXISTS idx_requests_client_ip   ON requests (client_ip);
 
 Para evitar el almacenamiento de binarios corruptos o el colapso de almacenamiento por payloads desmedidos, los campos `req_body` y `resp_body` aplican las siguientes reglas deterministas:
 
-| Marcador | Condición de Activación | Ejemplo / Resultado |
-| :--- | :--- | :--- |
-| `[REDACTED]` | Valores de campos sensibles identificados en JSON o texto plano. | `{"user":"admin","password":"[REDACTED]"}` |
-| `[TRUNCATED]` | Cuerpos que superan el tamaño configurado en `--max-body` (default 64 KB). | `{"data":[1,2,3...]} [TRUNCATED]` |
-| `[BINARY]` | Cargas con `Content-Type` no textual o bytes no decodificables en UTF-8. | *(El contenido binario se omite para proteger la base)* |
-| `[COMPRESSED]`| Respuestas con `Content-Encoding: gzip / br / deflate`. | *(Se omite la descompresión para evitar zip bombs y CPU waste)* |
+| Marcador       | Condición de Activación                                                    | Ejemplo / Resultado                                             |
+| :------------- | :------------------------------------------------------------------------- | :-------------------------------------------------------------- |
+| `[REDACTED]`   | Valores de campos sensibles identificados en JSON o texto plano.           | `{"user":"admin","password":"[REDACTED]"}`                      |
+| `[TRUNCATED]`  | Cuerpos que superan el tamaño configurado en `--max-body` (default 64 KB). | `{"data":[1,2,3...]} [TRUNCATED]`                               |
+| `[BINARY]`     | Cargas con `Content-Type` no textual o bytes no decodificables en UTF-8.   | _(El contenido binario se omite para proteger la base)_         |
+| `[COMPRESSED]` | Respuestas con `Content-Encoding: gzip / br / deflate`.                    | _(Se omite la descompresión para evitar zip bombs y CPU waste)_ |
 
 > 🔒 **Exclusión Absoluta de Cabeceras:** `authorization`, `cookie`, `set-cookie` y `proxy-authorization` son descartadas antes de serializar `req_headers` y `resp_headers`. Ver [docs/SECURITY.md](SECURITY.md).
 
@@ -96,11 +92,12 @@ Para evitar el almacenamiento de binarios corruptos o el colapso de almacenamien
 ## 4. Recetario de Consultas SQL (Playbook Forense)
 
 ### A. Diagnóstico de Errores e Incidentes 5xx
+
 ```sql
 -- Top 10 endpoints con mayor tasa de error 5xx en las últimas 24 horas
 SELECT method, path, resp_status, COUNT(*) AS total_fallos
 FROM requests
-WHERE resp_status >= 500 
+WHERE resp_status >= 500
   AND timestamp >= datetime('now', '-1 day')
 GROUP BY method, path, resp_status
 ORDER BY total_fallos DESC
@@ -115,6 +112,7 @@ LIMIT 1;
 ```
 
 ### B. Análisis de Rendimiento y Detección de Cuellos de Botella
+
 ```sql
 -- Distribución de latencia promedio y máxima por endpoint (mínimo 10 muestras)
 SELECT method, path,
@@ -129,9 +127,10 @@ LIMIT 15;
 ```
 
 ### C. Auditoría Forense y Seguridad por IP
+
 ```sql
 -- Actividad sospechosa: IPs con mayor volumen de peticiones erróneas (4xx / 5xx)
-SELECT client_ip, 
+SELECT client_ip,
        COUNT(*) AS total_errores,
        MIN(timestamp) AS primer_evento,
        MAX(timestamp) AS ultimo_evento
@@ -155,8 +154,6 @@ LIMIT 20;
 
 ## 5. Proyecciones de Crecimiento y Almacenamiento
 
-* **Cálculo de huella por fila:** $\approx 500\text{ bytes (metadatos + índices)} + \text{longitud real de bodies capturados}$.
-* **Escenario Típico (1,000 req/s con bodies de 1 KB):** $\approx 1.5\text{ GB / día}$.
-* **Políticas de Mantenimiento:** Para la ejecución de respaldos en caliente y compactación del archivo de base de datos, consulte [docs/OPERATIONS.md](OPERATIONS.md).
-
-
+- **Cálculo de huella por fila:** $\approx 500\text{ bytes (metadatos + índices)} + \text{longitud real de bodies capturados}$.
+- **Escenario Típico (1,000 req/s con bodies de 1 KB):** $\approx 1.5\text{ GB / día}$.
+- **Políticas de Mantenimiento:** Para la ejecución de respaldos en caliente y compactación del archivo de base de datos, consulte [docs/OPERATIONS.md](OPERATIONS.md).
