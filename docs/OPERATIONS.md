@@ -57,7 +57,6 @@ cargo install --path . --locked --root /usr/local
 | `--db-path` | `REQLENS_DB_PATH` | `./data/reqlens.db` | Ruta absoluta o relativa al archivo SQLite |
 | `--max-body` | `REQLENS_MAX_BODY` | `65536` (64 KB) | Límite máximo en bytes de captura por payload |
 | `--no-redact` | `REQLENS_NO_REDACT` | `false` | Desactiva redacción automática (**no recomendado**) |
-| `web --listen` | `REQLENS_WEB_LISTEN` | `127.0.0.1:8420` | Dirección loopback del dashboard web local |
 
 > 💡 **Principio Fail-Fast:** Precedencia: `CLI flags > Variables de Entorno > Defaults`. Cualquier error de parseo o puerto ocupado aborta inmediatamente el proceso con código de salida $\ne 0$ y traza en `stderr`.
 
@@ -82,11 +81,11 @@ cargo install --path . --locked --root /usr/local
    ```
    Ideal para entornos desatendidos, servicios systemd o contenedores. Las trazas de observabilidad se emiten en formato estructurado `tracing`.
 
-3. **Modo Dashboard Web:**
+3. **Modo TUI de consulta:**
    ```bash
-   reqlens web --db-path /var/lib/reqlens/reqlens.db
+   reqlens tui --db-path /var/lib/reqlens/reqlens.db
    ```
-   Abre un dashboard local de solo lectura en `http://127.0.0.1:8420`, con actualización automática, filtros, búsqueda, ordenamiento e inspección detallada de cabeceras y payloads. Para usar otro puerto local, añade `--listen 127.0.0.1:PUERTO`.
+   Abre la interfaz interactiva de solo lectura, con actualización automática, filtros, búsqueda, ordenamiento e inspección detallada de cabeceras y payloads.
 
 4. **Captura pasiva y arranque automático:**
    ```bash
@@ -100,7 +99,7 @@ cargo install --path . --locked --root /usr/local
    ```
    `reqlens install` registra el servicio en systemd o SysV, lo inicia en ese
    momento y lo habilita para los siguientes arranques. No es necesario usar
-   `nohup`. El dashboard se abre después con `reqlens web --db-path
+   `nohup`. La TUI se abre después con `reqlens tui --db-path
    /var/lib/reqlens/reqlens.db`; ese subcomando consulta el servicio existente
    y no ocupa el puerto HTTP observado.
 
@@ -250,7 +249,6 @@ sqlite3 /var/lib/reqlens/reqlens.db ".recover" | sqlite3 /var/lib/reqlens/reqlen
 | `proxy loop detected` o CPU elevada con listener `:80` | Se inició el modo proxy antiguo en vez del modo pasivo. | Detenerlo y usar `reqlens sniff --interface any --server-ip IP_DEL_SERVIDOR --port 80`. Apache permanece en `:80`. |
 | `passive capture needs root or CAP_NET_RAW` | El kernel rechazó la apertura de AF_PACKET. | Ejecutar como root o aplicar `setcap cap_net_raw=eip /usr/local/bin/reqlens`. |
 | No se capturan peticiones HTTPS | TLS cifra el protocolo HTTP antes de que AF_PACKET entregue la copia. | El modo pasivo inspecciona solamente HTTP plaintext; use instrumentación tras la terminación TLS si necesita bodies HTTPS. |
-| El dashboard no abre | Ya hay otra instancia usando `127.0.0.1:8420` o no hay navegador gráfico disponible. | Consulta la URL mostrada por `reqlens web`, libera el puerto o elige otro con `--listen 127.0.0.1:8421`. |
 | `database is locked` al ejecutar SQL | Una sesión externa mantiene una transacción `BEGIN EXCLUSIVE` sin cerrar. | Identificar y terminar la sesión analítica interactiva colgada. |
 | El archivo `-wal` no disminuye de tamaño | Checkpoints bloqueados por lectores concurrentes de larga duración. | Ejecutar `PRAGMA wal_checkpoint(TRUNCATE);` una vez concluidas las consultas pesadas. |
 | No aparecen peticiones recientes | Persistencia asíncrona por lotes (espera hasta 250 ms) o cola MPSC saturada. | Esperar 250 ms o inspeccionar trazas de `tracing` para descartar eventos descartados por saturación. |

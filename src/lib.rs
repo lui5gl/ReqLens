@@ -5,4 +5,4 @@ pub mod ingest;
 pub mod ops;
 pub mod proxy;
 pub mod sniff;
-pub mod web;
+pub mod tui;

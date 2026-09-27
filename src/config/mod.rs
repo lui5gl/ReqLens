@@ -43,6 +43,7 @@ pub fn resolve_config(
     db_path: PathBuf,
     max_body: usize,
     no_redact: bool,
+    tui_enabled: bool,
 ) -> Result<AppConfig> {
     let listen_addr: SocketAddr = listen
         .parse()
@@ -77,6 +78,7 @@ pub fn resolve_config(
         db_path,
         max_body,
         redact_enabled: !no_redact,
+        tui_enabled,
     })
 }
 
@@ -111,13 +113,15 @@ pub fn load_config() -> Result<AppConfig> {
             db_path,
             max_body,
             no_redact,
-        }) => resolve_config(&listen, &upstream, db_path, max_body, no_redact),
+            tui,
+        }) => resolve_config(&listen, &upstream, db_path, max_body, no_redact, tui),
         _ => resolve_config(
             &args.listen,
             &args.upstream,
             args.db_path,
             args.max_body,
             args.no_redact,
+            args.tui,
         ),
     }
 }

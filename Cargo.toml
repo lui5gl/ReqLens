@@ -21,7 +21,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
-include_dir = "0.7"
+ratatui = "0.29"
+# Use libc's termios implementation for compatibility with older Linux kernels.
+crossterm = { version = "0.28", features = ["libc", "use-dev-tty"] }
 httparse = "1.9"
 signal-hook = "0.3"
 libc = "0.2"
