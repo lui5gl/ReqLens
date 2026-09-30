@@ -6,9 +6,10 @@
 
 ## 🎯 El Problema: El Punto Ciego de Apache
 
-En infraestructuras basadas en Apache, el registro estándar (`access.log`) únicamente captura metadatos superficiales: método, ruta, status code y bytes transmitidos. 
+En infraestructuras basadas en Apache, el registro estándar (`access.log`) únicamente captura metadatos superficiales: método, ruta, status code y bytes transmitidos.
 
 Frente a incidentes en producción, bugs intermitentes o auditorías de seguridad, **`access.log` no responde las preguntas críticas:**
+
 - ¿Qué JSON o payload exacto envió el cliente que provocó un error 500?
 - ¿Qué mensaje de error o respuesta devolvió la aplicación backend?
 - ¿Qué parámetros específicos causaron una mutación inesperada de datos?
@@ -39,7 +40,7 @@ conexiones y no modifica el camino entre los clientes y Apache.
 1. **No Invasivo (Zero-Config Apache):** No requiere instalar módulos, alterar `httpd.conf`, cambiar el puerto 80, reiniciar Apache ni agregar reglas NAT.
 2. **Fail-Open Real:** ReqLens recibe una copia de los paquetes; detenerlo o matarlo no interrumpe Apache ni PHP.
 3. **Persistencia Desacoplada (Asíncrona):** Las peticiones y respuestas se capturan en memoria mediante un canal acotado; la latencia de escritura a disco nunca penaliza el tiempo de respuesta del cliente.
-4. **Seguridad y Privacidad por Defecto (*Fail-Safe*):** Redacción automática de credenciales y datos sensibles (`password`, `token`, `secret`, `api_key`) y exclusión inmutable de cookies y cabeceras de autorización.
+4. **Seguridad y Privacidad por Defecto (_Fail-Safe_):** Redacción automática de credenciales y datos sensibles (`password`, `token`, `secret`, `api_key`) y exclusión inmutable de cookies y cabeceras de autorización.
 
 ---
 
@@ -80,19 +81,17 @@ y no puede inspeccionarse pasivamente. El proxy histórico se conserva de forma
 explícita con `reqlens start` (alias conceptual `proxy`) para instalaciones que
 sí acepten colocarlo en el camino crítico.
 
-
-
 ---
 
 ## 🛡️ Garantías y Resiliencia
 
 ReqLens implementa una semántica **at-most-once** diseñada específicamente para telemetría de alta velocidad:
 
-| Escenario | Comportamiento del Sistema |
-| :--- | :--- |
-| **Pico de tráfico saturado (>1k req/s)** | Los eventos excedentes en cola se descartan; Apache no depende del observador. |
-| **Caída o desconexión de disco** | El lote se revierte y se reporta; las peticiones HTTP siguen llegando directamente a Apache. |
-| **Cierre controlado (SIGTERM/SIGINT)** | Drenado automático de peticiones en vuelo y flush de eventos pendientes a disco. |
+| Escenario                                | Comportamiento del Sistema                                                                   |
+| :--------------------------------------- | :------------------------------------------------------------------------------------------- |
+| **Pico de tráfico saturado (>1k req/s)** | Los eventos excedentes en cola se descartan; Apache no depende del observador.               |
+| **Caída o desconexión de disco**         | El lote se revierte y se reporta; las peticiones HTTP siguen llegando directamente a Apache. |
+| **Cierre controlado (SIGTERM/SIGINT)**   | Drenado automático de peticiones en vuelo y flush de eventos pendientes a disco.             |
 
 ---
 
