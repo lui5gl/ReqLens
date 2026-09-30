@@ -1,8 +1,8 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, Borders, Row, Table};
+use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
 
 use crate::tui::model::RequestSummary;
 use crate::tui::state::TuiState;
@@ -24,7 +24,7 @@ pub fn render_table(frame: &mut Frame, area: Rect, state: &TuiState) {
     )
     .bottom_margin(1);
 
-    let visible_row_count = usize::from(area.height.saturating_sub(4)).max(1);
+    let visible_row_count = usize::from(area.height.saturating_sub(2)).max(1);
     let visible_start = state
         .selected_index
         .saturating_add(1)
@@ -52,16 +52,63 @@ pub fn render_table(frame: &mut Frame, area: Rect, state: &TuiState) {
         Constraint::Min(20),
     ];
 
-    let table = Table::new(rows, widths).header(header).block(
-        Block::default().borders(Borders::ALL).title(format!(
-            " Peticiones Capturadas ({}) | {}-{} ",
+    let title = if state.requests.is_empty() {
+        "REQUESTS  0".to_string()
+    } else {
+        format!(
+            "REQUESTS  {}  ·  showing {}-{}",
             state.requests.len(),
             visible_start.saturating_add(1),
             visible_end
-        )),
+        )
+    };
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::DarkGray)),
     );
 
     frame.render_widget(table, area);
+    if state.requests.is_empty() {
+        let table_body = Block::default().borders(Borders::ALL).inner(area);
+        let body_area = Rect {
+            y: table_body.y.saturating_add(2),
+            height: table_body.height.saturating_sub(2),
+            ..table_body
+        };
+        let empty_area = centered_message_area(body_area);
+        let message = if state.search_query.is_empty() {
+            "Esperando peticiones..."
+        } else {
+            "Ninguna petición coincide con este filtro"
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(Color::DarkGray))
+                .centered(),
+            empty_area,
+        );
+    }
+}
+
+fn centered_message_area(area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn build_table_row(req: &RequestSummary, is_selected: bool) -> Row<'static> {
@@ -104,8 +151,9 @@ fn build_table_row(req: &RequestSummary, is_selected: bool) -> Row<'static> {
         .unwrap_or(&req.timestamp)
         .to_string();
 
+    let selection_marker = if is_selected { "▸" } else { " " };
     Row::new(vec![
-        Span::raw(format!("#{}", req.id)),
+        Span::raw(format!("{selection_marker}{}", req.id)),
         Span::raw(time_str),
         Span::styled(req.method.clone(), method_style),
         Span::styled(format!("{}", req.resp_status), status_style),

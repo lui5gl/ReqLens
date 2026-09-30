@@ -10,16 +10,25 @@ use crate::tui::state::TuiState;
 pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &TuiConfig) {
     let title = Line::from(vec![
         Span::styled(
-            " ReqLens ",
+            "ReqLens",
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(match &config.source {
-            TuiSource::Passive { .. } => " | Passive HTTP Observability",
-            TuiSource::Proxy { .. } => " | HTTP Proxy Observability",
-        }),
+        Span::styled(
+            match &config.source {
+                TuiSource::Passive { .. } => "  PASSIVE HTTP OBSERVABILITY",
+                TuiSource::Proxy { .. } => "  HTTP PROXY OBSERVABILITY",
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            "LIVE",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]);
     let source_line = match &config.source {
         TuiSource::Passive {
@@ -27,28 +36,23 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &T
             server_ip,
             port,
         } => Line::from(vec![
-            Span::styled(
-                format!("Interface: {interface} | "),
-                Style::default().fg(Color::Yellow),
-            ),
+            Span::styled("SOURCE ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{interface}"), Style::default().fg(Color::Yellow)),
+            Span::styled("  ·  TARGET ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!(
-                    "Server: {} | Port: {port}",
-                    server_ip.map_or_else(|| "any".to_string(), |ip| ip.to_string())
+                    "{}:{}",
+                    server_ip.map_or_else(|| "any".to_string(), |ip| ip.to_string()),
+                    port
                 ),
-                Style::default().fg(Color::Green),
+                Style::default().fg(Color::White),
             ),
         ]),
         TuiSource::Proxy { listen, upstream } => Line::from(vec![
-            Span::styled(
-                format!("Listen: {listen} "),
-                Style::default().fg(Color::Yellow),
-            ),
-            Span::raw("-> "),
-            Span::styled(
-                format!("Upstream: {upstream} "),
-                Style::default().fg(Color::Green),
-            ),
+            Span::styled("LISTEN ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{listen}"), Style::default().fg(Color::Yellow)),
+            Span::styled("  ->  UPSTREAM ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{upstream}"), Style::default().fg(Color::White)),
         ]),
     };
 
@@ -58,32 +62,41 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &TuiState, config: &T
         Color::Green
     };
     let stats_line = Line::from(vec![
-        Span::raw("Total: "),
+        Span::styled("REQUESTS ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{} ", state.stats.total_requests),
+            format!("{}", state.stats.total_requests),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("| Errores: "),
+        Span::styled("   ERRORS ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{} ", state.stats.error_count),
+            format!("{}", state.stats.error_count),
             Style::default()
                 .fg(error_color)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("| Latencia Promedio: "),
+        Span::styled("   AVG LATENCY ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{:.1} ms ", state.stats.avg_latency_ms),
-            Style::default().fg(Color::Magenta),
+            format_latency(state.stats.avg_latency_ms),
+            Style::default().fg(Color::Cyan),
         ),
-        Span::raw("| WAL: "),
-        Span::styled("Activo", Style::default().fg(Color::Green)),
     ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .title(" ReqLens ")
         .border_style(Style::default().fg(Color::DarkGray));
-    let header_widget = Paragraph::new(vec![title, source_line, stats_line]).block(block);
-    frame.render_widget(header_widget, area);
+    frame.render_widget(
+        Paragraph::new(vec![title, source_line, stats_line]).block(block),
+        area,
+    );
+}
+
+fn format_latency(latency_ms: f64) -> String {
+    if latency_ms == 0.0 {
+        "—".to_string()
+    } else {
+        format!("{latency_ms:.1} ms")
+    }
 }

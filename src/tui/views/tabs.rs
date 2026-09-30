@@ -10,42 +10,32 @@ use crate::tui::state::TuiState;
 pub fn render_tabs(frame: &mut Frame, area: Rect, state: &TuiState) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(45), Constraint::Min(20)])
+        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
         .split(area);
 
-    let titles: Vec<Line> = FilterTab::ALL
-        .iter()
-        .map(|t| {
-            let style = if *t == state.active_tab {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+    let titles = FilterTab::ALL.iter().map(|tab| {
+        Line::from(Span::styled(
+            tab.title(),
+            Style::default().fg(if *tab == state.active_tab {
+                Color::Yellow
             } else {
-                Style::default().fg(Color::Gray)
-            };
-            Line::from(Span::styled(t.title(), style))
-        })
-        .collect();
-
+                Color::Gray
+            }),
+        ))
+    });
     let selected_index = match state.active_tab {
         FilterTab::All => 0,
         FilterTab::Errors => 1,
         FilterTab::Slow => 2,
     };
-
     let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Vistas / Filtros [Tab] "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" Filters "))
+        .select(selected_index)
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::UNDERLINED),
-        )
-        .select(selected_index);
-
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        );
     frame.render_widget(tabs, chunks[0]);
 
     let search_style = if state.is_searching {
@@ -63,18 +53,18 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &TuiState) {
 
     let search_display = if state.search_query.is_empty() {
         if state.is_searching {
-            "Escribe para buscar... (Enter/Esc)".to_string()
+            "escribe para buscar...".to_string()
         } else {
-            "Presiona [/] para buscar".to_string()
+            "sin filtro".to_string()
         }
     } else {
-        format!("\"{}\" (Esc para limpiar)", state.search_query)
+        format!("\"{}\"", state.search_query)
     };
 
     let filter_info = Line::from(vec![
-        Span::raw("🔍 Buscar: "),
+        Span::styled("Search ", Style::default().fg(Color::DarkGray)),
         Span::styled(search_display, search_style),
-        Span::raw(" | 🔄 Orden [s]: "),
+        Span::styled("  ·  Sort ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             state.sort_field.label(),
             Style::default()
@@ -83,22 +73,18 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &TuiState) {
         ),
     ]);
 
-    let error_line = state.data_error.as_deref().map(|error| {
-        Line::from(Span::styled(
-            format!("Error de datos: {error}"),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ))
-    });
-
-    let search_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Búsqueda y Ordenamiento ");
-    let search_widget = Paragraph::new(
-        error_line
-            .into_iter()
-            .chain([filter_info])
-            .collect::<Vec<_>>(),
-    )
-    .block(search_block);
-    frame.render_widget(search_widget, chunks[1]);
+    let lines = match state.data_error.as_deref() {
+        Some(error) => vec![
+            filter_info,
+            Line::from(Span::styled(
+                format!("Data error: {error}"),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )),
+        ],
+        None => vec![filter_info],
+    };
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Query ")),
+        chunks[1],
+    );
 }

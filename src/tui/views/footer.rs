@@ -2,61 +2,65 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 pub fn render_footer(frame: &mut Frame, area: Rect) {
     let footer_text = Line::from(vec![
         Span::styled(
-            "[q/Ctrl+C] ",
+            "q ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Salir | "),
+        Span::raw("salir   "),
         Span::styled(
-            "[/] ",
+            "/ ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Buscar | "),
+        Span::raw("buscar   "),
         Span::styled(
-            "[s] ",
+            "s ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Ordenar | "),
+        Span::raw("ordenar   "),
         Span::styled(
-            "[1-3/Tab] ",
+            "1-3/Tab ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Filtros | "),
+        Span::raw("filtros   "),
         Span::styled(
-            "[↑/↓/j/k] ",
+            "↑↓/j/k ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Navegar | "),
+        Span::raw("navegar   "),
         Span::styled(
-            "[Enter] ",
+            "Enter ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Ver Detalle | "),
+        Span::raw("detalle   "),
         Span::styled(
-            "[r] ",
+            "r ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("Refrescar"),
+        Span::raw("refrescar"),
     ]);
 
-    let footer = Paragraph::new(footer_text);
+    let footer = Paragraph::new(footer_text).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(footer, area);
 }

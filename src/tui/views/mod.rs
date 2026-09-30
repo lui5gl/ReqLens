@@ -17,7 +17,7 @@ pub fn render_ui(frame: &mut Frame, state: &TuiState, config: &TuiConfig) {
         .constraints([
             Constraint::Length(5),
             Constraint::Length(3),
-            Constraint::Min(8),
+            Constraint::Min(6),
             Constraint::Length(2),
         ])
         .split(frame.area());
