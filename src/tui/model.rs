@@ -17,6 +17,128 @@ impl FilterTab {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MethodFilter {
+    Any,
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+}
+
+impl MethodFilter {
+    pub const ALL: [MethodFilter; 6] = [
+        MethodFilter::Any,
+        MethodFilter::Get,
+        MethodFilter::Post,
+        MethodFilter::Put,
+        MethodFilter::Patch,
+        MethodFilter::Delete,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            MethodFilter::Any => "Cualquiera",
+            MethodFilter::Get => "GET",
+            MethodFilter::Post => "POST",
+            MethodFilter::Put => "PUT",
+            MethodFilter::Patch => "PATCH",
+            MethodFilter::Delete => "DELETE",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        let index = Self::ALL.iter().position(|item| item == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()].clone()
+    }
+}
+
+impl Default for MethodFilter {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusFilter {
+    Any,
+    Errors,
+    ClientErrors,
+    ServerErrors,
+}
+
+impl StatusFilter {
+    pub const ALL: [StatusFilter; 4] = [
+        StatusFilter::Any,
+        StatusFilter::Errors,
+        StatusFilter::ClientErrors,
+        StatusFilter::ServerErrors,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            StatusFilter::Any => "Cualquiera",
+            StatusFilter::Errors => "Errores (>=400)",
+            StatusFilter::ClientErrors => "4xx",
+            StatusFilter::ServerErrors => "5xx",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        let index = Self::ALL.iter().position(|item| item == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()].clone()
+    }
+}
+
+impl Default for StatusFilter {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestFilters {
+    pub method: MethodFilter,
+    pub status: StatusFilter,
+    pub path: String,
+    pub min_duration_ms: Option<i64>,
+}
+
+impl Default for RequestFilters {
+    fn default() -> Self {
+        Self {
+            method: MethodFilter::Any,
+            status: StatusFilter::Any,
+            path: String::new(),
+            min_duration_ms: None,
+        }
+    }
+}
+
+impl RequestFilters {
+    pub fn summary(&self) -> String {
+        let mut values = Vec::new();
+        if self.method != MethodFilter::Any {
+            values.push(format!("Método: {}", self.method.label()));
+        }
+        if self.status != StatusFilter::Any {
+            values.push(format!("Estado: {}", self.status.label()));
+        }
+        if !self.path.is_empty() {
+            values.push(format!("Ruta: {}", self.path));
+        }
+        if let Some(duration) = self.min_duration_ms {
+            values.push(format!("Desde: {duration} ms"));
+        }
+        if values.is_empty() {
+            "sin filtros avanzados".to_string()
+        } else {
+            values.join("  ·  ")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortField {
     #[default]

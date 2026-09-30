@@ -36,4 +36,7 @@ pub fn render_ui(frame: &mut Frame, state: &TuiState, config: &TuiConfig) {
             state.detail_notice.as_deref(),
         );
     }
+    if state.draft_filters.is_some() {
+        modal::render_filter_modal(frame, frame.area(), state);
+    }
 }

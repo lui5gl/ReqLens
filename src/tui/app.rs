@@ -162,9 +162,25 @@ fn handle_key_event(state: &mut TuiState, key: KeyEvent) {
         return;
     }
 
+    if state.draft_filters.is_some() {
+        match code {
+            KeyCode::Esc => state.close_filter_editor(),
+            KeyCode::Enter => state.apply_filter_editor(),
+            KeyCode::Tab | KeyCode::Down => state.next_filter_field(),
+            KeyCode::BackTab | KeyCode::Up => state.previous_filter_field(),
+            KeyCode::Right | KeyCode::Char(' ') => state.cycle_filter_value(),
+            KeyCode::Backspace => state.pop_filter_char(),
+            KeyCode::Delete => state.clear_filter_field(),
+            KeyCode::Char(character) => state.add_filter_char(character),
+            _ => {}
+        }
+        return;
+    }
+
     match code {
         KeyCode::Char('q') => state.should_quit = true,
         KeyCode::Char('/') => state.is_searching = true,
+        KeyCode::Char('f') => state.open_filter_editor(),
         KeyCode::Char('s') | KeyCode::Char('o') => state.cycle_sort(),
         KeyCode::Esc if !state.search_query.is_empty() => state.clear_search(),
         KeyCode::Down | KeyCode::Char('j') => state.next_row(),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::ingest::schema::initialize_schema;
+use crate::tui::model::{MethodFilter, StatusFilter};
 
 #[test]
 fn test_fetch_stats_and_requests() {
@@ -24,21 +25,57 @@ fn test_fetch_stats_and_requests() {
     assert_eq!(stats.error_count, 1);
     assert!((stats.avg_latency_ms - 385.0).abs() < f64::EPSILON);
 
-    let all_reqs = fetch_requests(&conn, FilterTab::All, SortField::Recent, "", 10).unwrap();
+    let filters = RequestFilters::default();
+    let all_reqs =
+        fetch_requests(&conn, FilterTab::All, SortField::Recent, "", &filters, 10).unwrap();
     assert_eq!(all_reqs.len(), 2);
 
-    let error_reqs = fetch_requests(&conn, FilterTab::Errors, SortField::Recent, "", 10).unwrap();
+    let error_reqs = fetch_requests(
+        &conn,
+        FilterTab::Errors,
+        SortField::Recent,
+        "",
+        &filters,
+        10,
+    )
+    .unwrap();
     assert_eq!(error_reqs.len(), 1);
     assert_eq!(error_reqs[0].resp_status, 500);
 
-    let slow_reqs = fetch_requests(&conn, FilterTab::Slow, SortField::Slowest, "", 10).unwrap();
+    let slow_reqs =
+        fetch_requests(&conn, FilterTab::Slow, SortField::Slowest, "", &filters, 10).unwrap();
     assert_eq!(slow_reqs.len(), 1);
     assert_eq!(slow_reqs[0].duration_ms, 650);
 
-    let search_reqs =
-        fetch_requests(&conn, FilterTab::All, SortField::Recent, "login", 10).unwrap();
+    let search_reqs = fetch_requests(
+        &conn,
+        FilterTab::All,
+        SortField::Recent,
+        "login",
+        &filters,
+        10,
+    )
+    .unwrap();
     assert_eq!(search_reqs.len(), 1);
     assert_eq!(search_reqs[0].path, "/api/login");
+
+    let combined_filters = RequestFilters {
+        method: MethodFilter::Post,
+        status: StatusFilter::ServerErrors,
+        path: "/api".to_string(),
+        min_duration_ms: Some(600),
+    };
+    let combined_reqs = fetch_requests(
+        &conn,
+        FilterTab::All,
+        SortField::Recent,
+        "",
+        &combined_filters,
+        10,
+    )
+    .unwrap();
+    assert_eq!(combined_reqs.len(), 1);
+    assert_eq!(combined_reqs[0].path, "/api/login");
 
     let detail = fetch_request_detail(&conn, error_reqs[0].id)
         .unwrap()

@@ -1,5 +1,7 @@
 use super::detail::format_request_detail;
-use super::model::{DashboardStats, FilterTab, RequestDetail, RequestSummary, SortField};
+use super::model::{
+    DashboardStats, FilterTab, RequestDetail, RequestFilters, RequestSummary, SortField,
+};
 use super::repo::{fetch_request_detail, fetch_requests, fetch_stats, open_readonly_conn};
 use std::path::PathBuf;
 
@@ -9,6 +11,9 @@ pub struct TuiState {
     pub sort_field: SortField,
     pub search_query: String,
     pub is_searching: bool,
+    pub filters: RequestFilters,
+    pub draft_filters: Option<RequestFilters>,
+    pub filter_field: usize,
     pub requests: Vec<RequestSummary>,
     pub selected_index: usize,
     pub selected_detail: Option<RequestDetail>,
@@ -27,6 +32,9 @@ impl TuiState {
             sort_field: SortField::Recent,
             search_query: String::new(),
             is_searching: false,
+            filters: RequestFilters::default(),
+            draft_filters: None,
+            filter_field: 0,
             requests: Vec::new(),
             selected_index: 0,
             selected_detail: None,
@@ -67,6 +75,7 @@ impl TuiState {
             self.active_tab,
             self.sort_field,
             &self.search_query,
+            &self.filters,
             100,
         ) {
             Ok(requests) => requests,
@@ -124,6 +133,93 @@ impl TuiState {
         self.active_tab = tab;
         self.selected_index = 0;
         self.reload_data();
+    }
+
+    pub fn open_filter_editor(&mut self) {
+        self.draft_filters = Some(self.filters.clone());
+        self.filter_field = 0;
+    }
+
+    pub fn close_filter_editor(&mut self) {
+        self.draft_filters = None;
+    }
+
+    pub fn apply_filter_editor(&mut self) {
+        if let Some(filters) = self.draft_filters.take() {
+            self.filters = filters;
+            self.selected_index = 0;
+            self.reload_data();
+        }
+    }
+
+    pub fn next_filter_field(&mut self) {
+        self.filter_field = (self.filter_field + 1) % 4;
+    }
+
+    pub fn previous_filter_field(&mut self) {
+        self.filter_field = self.filter_field.checked_sub(1).unwrap_or(3);
+    }
+
+    pub fn cycle_filter_value(&mut self) {
+        let Some(filters) = self.draft_filters.as_mut() else {
+            return;
+        };
+        match self.filter_field {
+            0 => filters.method = filters.method.next(),
+            1 => filters.status = filters.status.next(),
+            _ => {}
+        }
+    }
+
+    pub fn add_filter_char(&mut self, character: char) {
+        let Some(filters) = self.draft_filters.as_mut() else {
+            return;
+        };
+        match self.filter_field {
+            2 => filters.path.push(character),
+            3 if character.is_ascii_digit() => {
+                let mut value = filters
+                    .min_duration_ms
+                    .map(|item| item.to_string())
+                    .unwrap_or_default();
+                value.push(character);
+                filters.min_duration_ms = value.parse().ok();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn pop_filter_char(&mut self) {
+        let Some(filters) = self.draft_filters.as_mut() else {
+            return;
+        };
+        match self.filter_field {
+            2 => {
+                filters.path.pop();
+            }
+            3 => {
+                let mut value = filters
+                    .min_duration_ms
+                    .map(|item| item.to_string())
+                    .unwrap_or_default();
+                value.pop();
+                filters.min_duration_ms = value.parse().ok();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn clear_filter_field(&mut self) {
+        let Some(filters) = self.draft_filters.as_mut() else {
+            return;
+        };
+        match self.filter_field {
+            0 => filters.method = Default::default(),
+            1 => filters.status = Default::default(),
+            2 => filters.path.clear(),
+            3 => filters.min_duration_ms = None,
+            _ => {}
+        }
     }
 
     pub fn toggle_detail(&mut self) {

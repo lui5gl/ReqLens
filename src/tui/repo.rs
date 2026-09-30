@@ -1,6 +1,8 @@
-use super::model::{DashboardStats, FilterTab, RequestDetail, RequestSummary, SortField};
+use super::model::{
+    DashboardStats, FilterTab, RequestDetail, RequestFilters, RequestSummary, SortField,
+};
 use crate::error::Result;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, params, types::Value};
 use std::path::Path;
 
 pub fn open_readonly_conn(db_path: &Path) -> Result<Option<Connection>> {
@@ -16,7 +18,7 @@ pub fn open_readonly_conn(db_path: &Path) -> Result<Option<Connection>> {
 pub fn fetch_stats(conn: &Connection) -> Result<DashboardStats> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT 
+        SELECT
             COUNT(*),
             COALESCE(SUM(CASE WHEN resp_status >= 400 THEN 1 ELSE 0 END), 0),
             COALESCE(AVG(duration_ms), 0.0)
@@ -40,39 +42,59 @@ pub fn fetch_requests(
     filter: FilterTab,
     sort: SortField,
     search: &str,
+    filters: &RequestFilters,
     limit: usize,
 ) -> Result<Vec<RequestSummary>> {
-    let base_filter = match filter {
-        FilterTab::All => "1=1",
-        FilterTab::Errors => "resp_status >= 400",
-        FilterTab::Slow => "duration_ms >= 500",
-    };
-
-    let trimmed_search = search.trim();
-    let has_search = !trimmed_search.is_empty();
-
-    let sql = if has_search {
-        format!(
-            "SELECT id, timestamp, duration_ms, client_ip, method, path, resp_status FROM requests WHERE {} AND (path LIKE ?1 OR method LIKE ?1 OR client_ip LIKE ?1 OR CAST(resp_status AS TEXT) LIKE ?1) {} LIMIT ?2",
-            base_filter,
-            sort.sql_order_by()
-        )
+    let mut conditions = Vec::new();
+    let mut values = Vec::new();
+    match filter {
+        FilterTab::All => {}
+        FilterTab::Errors => conditions.push("resp_status >= 400".to_string()),
+        FilterTab::Slow => conditions.push("duration_ms >= 500".to_string()),
+    }
+    if filters.method != super::model::MethodFilter::Any {
+        conditions.push(format!("method = ?{}", values.len() + 1));
+        values.push(Value::Text(filters.method.label().to_string()));
+    }
+    match filters.status {
+        super::model::StatusFilter::Any => {}
+        super::model::StatusFilter::Errors => conditions.push("resp_status >= 400".to_string()),
+        super::model::StatusFilter::ClientErrors => {
+            conditions.push("resp_status BETWEEN 400 AND 499".to_string())
+        }
+        super::model::StatusFilter::ServerErrors => {
+            conditions.push("resp_status BETWEEN 500 AND 599".to_string())
+        }
+    }
+    if !filters.path.trim().is_empty() {
+        conditions.push(format!("path LIKE ?{}", values.len() + 1));
+        values.push(Value::Text(format!("%{}%", filters.path.trim())));
+    }
+    if let Some(min_duration) = filters.min_duration_ms {
+        conditions.push(format!("duration_ms >= ?{}", values.len() + 1));
+        values.push(Value::Integer(min_duration));
+    }
+    if !search.trim().is_empty() {
+        let parameter = values.len() + 1;
+        conditions.push(format!(
+            "(path LIKE ?{parameter} OR method LIKE ?{parameter} OR client_ip LIKE ?{parameter} OR CAST(resp_status AS TEXT) LIKE ?{parameter})"
+        ));
+        values.push(Value::Text(format!("%{}%", search.trim())));
+    }
+    values.push(Value::Integer(limit as i64));
+    let where_clause = if conditions.is_empty() {
+        "1=1".to_string()
     } else {
-        format!(
-            "SELECT id, timestamp, duration_ms, client_ip, method, path, resp_status FROM requests WHERE {} {} LIMIT ?1",
-            base_filter,
-            sort.sql_order_by()
-        )
+        conditions.join(" AND ")
     };
-
+    let sql = format!(
+        "SELECT id, timestamp, duration_ms, client_ip, method, path, resp_status FROM requests WHERE {} {} LIMIT ?{}",
+        where_clause,
+        sort.sql_order_by(),
+        values.len()
+    );
     let mut stmt = conn.prepare(&sql)?;
-
-    let rows = if has_search {
-        let pattern = format!("%{}%", trimmed_search);
-        stmt.query_map(params![pattern, limit as i64], map_summary_row)?
-    } else {
-        stmt.query_map(params![limit as i64], map_summary_row)?
-    };
+    let rows = stmt.query_map(rusqlite::params_from_iter(values), map_summary_row)?;
 
     let mut list = Vec::new();
     for r in rows {
@@ -96,7 +118,7 @@ fn map_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestSummary> 
 pub fn fetch_request_detail(conn: &Connection, id: i64) -> Result<Option<RequestDetail>> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT 
+        SELECT
             id, timestamp, duration_ms, client_ip, client_ua,
             method, path, query, req_headers, req_body,
             resp_status, resp_headers, resp_body

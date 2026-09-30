@@ -71,6 +71,8 @@ pub fn render_tabs(frame: &mut Frame, area: Rect, state: &TuiState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled("  ·  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(state.filters.summary(), Style::default().fg(Color::Green)),
     ]);
 
     let lines = match state.data_error.as_deref() {

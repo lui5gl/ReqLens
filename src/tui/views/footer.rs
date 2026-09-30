@@ -28,12 +28,19 @@ pub fn render_footer(frame: &mut Frame, area: Rect) {
         ),
         Span::raw("ordenar   "),
         Span::styled(
+            "f ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("filtros avanzados   "),
+        Span::styled(
             "1-3/Tab ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("filtros   "),
+        Span::raw("presets   "),
         Span::styled(
             "↑↓/j/k ",
             Style::default()
