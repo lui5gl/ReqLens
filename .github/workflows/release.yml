@@ -65,7 +65,7 @@ jobs:
 
           cp "target/${{ matrix.target }}/release/reqlens" "${STAGING_DIR}/"
           cp LICENSE "${STAGING_DIR}/"
-          cp README.md "${STAGING_DIR}/"
+          cp docs/README.md "${STAGING_DIR}/"
 
           tar -czf "${ARCHIVE_NAME}.tar.gz" -C staging "${ARCHIVE_NAME}"
           sha256sum "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
