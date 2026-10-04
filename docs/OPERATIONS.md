@@ -18,11 +18,10 @@
 
 El pipeline de GitHub Actions genera automáticamente binarios precompilados en cada release:
 
-| Target de Compilación            | Tipo de Enlace                | Compatibilidad de Sistema                                                                                                                                                                               |
-| :------------------------------- | :---------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`x86_64-unknown-linux-musl`**  | **100% Estático (Zero-Deps)** | **Universal / Máxima Compatibilidad:** Funciona en cualquier distribución Linux (antiguas como CentOS 6/7, Debian 8/9, RHEL o modernas como Alpine, Ubuntu, Fedora) sin importar la versión de `glibc`. |
-| **`x86_64-unknown-linux-gnu`**   | Dinámico (`glibc`)            | Distribuciones Linux modernas estándar de 64 bits.                                                                                                                                                      |
-| **`aarch64-unknown-linux-musl`** | **100% Estático (Zero-Deps)** | Servidores ARM64 (AWS Graviton, Raspberry Pi 4/5, servidores cloud ARM).                                                                                                                                |
+| Target de Compilación           | Tipo de Enlace                | Compatibilidad de Sistema                                                                                                                                                                               |
+| :------------------------------ | :---------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`x86_64-unknown-linux-musl`** | **100% Estático (Zero-Deps)** | **Universal / Máxima Compatibilidad:** Funciona en cualquier distribución Linux (antiguas como CentOS 6/7, Debian 8/9, RHEL o modernas como Alpine, Ubuntu, Fedora) sin importar la versión de `glibc`. |
+| **`x86_64-unknown-linux-gnu`**  | Dinámico (`glibc`)            | Distribuciones Linux modernas estándar de 64 bits.                                                                                                                                                      |
 
 ### Instalación Rápida desde Release Precompilado
 

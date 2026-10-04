@@ -3,12 +3,11 @@ name: Release & Deployment
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 permissions:
   contents: write
-
 
 jobs:
   build-release:
@@ -20,18 +19,9 @@ jobs:
         include:
           # Linux moderno estándar con glibc
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: false
 
           # Linux estático universal (MUSL) para cualquier distribución antigua o moderna (Alpine, CentOS, Debian, etc.)
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: false
-
-          # Linux ARM64 estático (MUSL) para Raspberry Pi / AWS Graviton / Servidores ARM
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: true
 
     steps:
       - name: Checkout source code
@@ -48,23 +38,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install Cross (for ARM cross-compilation)
-        if: matrix.use_cross
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Cache Cargo dependencies
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Extract project version
         id: get_version
